@@ -555,8 +555,8 @@ export interface CoordinationPayload {
     >;
     resources: EmergencyResourceItem[];
     routes: EvacuationRouteItem[];
-    rescue_requests: RescueRequestItem[];
-    volunteers: VolunteerItem[];
+    rescue_requests?: RescueRequestItem[];
+    volunteers?: VolunteerItem[];
     countries: Record<string, AseanCountry>;
     categories: Array<{ id: string; label: string; icon: string }>;
 }

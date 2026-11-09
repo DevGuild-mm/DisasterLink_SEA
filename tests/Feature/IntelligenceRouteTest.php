@@ -1,6 +1,5 @@
 <?php
 
-use App\Models\User;
 use App\Services\Disaster\GdacsService;
 use App\Services\Disaster\NasaEonetService;
 use App\Services\Disaster\OpenMeteoService;
@@ -11,6 +10,7 @@ use Inertia\Testing\AssertableInertia as Assert;
 uses(RefreshDatabase::class);
 
 beforeEach(function () {
+    config(['modules.intelligence' => true]);
     // Mock upstream API services to prevent live HTTP calls during test runs
     $mockMeta = fn (string $source) => [
         'source' => $source,

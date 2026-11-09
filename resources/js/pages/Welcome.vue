@@ -4,12 +4,10 @@ import {
     Activity,
     AlertTriangle,
     ArrowRight,
-    BellRing,
     CloudSun,
     Database,
     ExternalLink,
     Globe,
-    LifeBuoy,
     RefreshCw,
     ShieldAlert,
 } from '@lucide/vue';
@@ -46,22 +44,6 @@ const keyFeatures = [
         icon: Activity,
         href: '/overview',
         color: 'text-rose-500 bg-rose-500/10 border-rose-500/20',
-    },
-    {
-        title: 'Early Warning & Risk Intelligence',
-        description:
-            'Multi-hazard risk assessment scoring, automated early warning alerts, longitudinal ASEAN analytics, and response triage.',
-        icon: BellRing,
-        href: '/intelligence',
-        color: 'text-purple-500 bg-purple-500/10 border-purple-500/20',
-    },
-    {
-        title: 'Emergency Coordination & Shelters',
-        description:
-            'Shelter availability tracking, relief supply inventories, verified hazard-aware evacuation transit, and volunteer rescue dispatch.',
-        icon: LifeBuoy,
-        href: '/coordination',
-        color: 'text-sky-500 bg-sky-500/10 border-sky-500/20',
     },
     {
         title: 'Interactive Regional Map',

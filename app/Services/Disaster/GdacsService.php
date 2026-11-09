@@ -11,10 +11,15 @@ use Throwable;
 class GdacsService
 {
     private const CACHE_KEY = 'gdacs_disaster_events_sea';
+
     private const CACHE_META_KEY = 'gdacs_meta_sea';
+
     private const CACHE_FRESH_KEY = 'gdacs_fresh_lock_sea';
+
     private const DEFAULT_TTL_SECONDS = 300; // 5 minutes
+
     private const STALE_BACKUP_TTL_SECONDS = 86400; // 24 hours backup for stale fallback
+
     private const MIN_FORCE_REFRESH_INTERVAL = 15; // seconds
 
     // ASEAN 11 ISO3 Codes
@@ -77,7 +82,7 @@ class GdacsService
         $isFreshLock = Cache::has(self::CACHE_FRESH_KEY);
 
         if ($cached !== null && $cachedMeta !== null) {
-            if (!$forceRefresh && $isFreshLock) {
+            if (! $forceRefresh && $isFreshLock) {
                 return [
                     'events' => $cached,
                     'meta' => $this->refreshMetaTimestamps($cachedMeta, $ttl, true),
@@ -85,7 +90,7 @@ class GdacsService
             }
 
             // Prevent upstream rate-limit abuse on rapid manual refreshes
-            if ($forceRefresh && !empty($cachedMeta['last_successful_fetch'])) {
+            if ($forceRefresh && ! empty($cachedMeta['last_successful_fetch'])) {
                 try {
                     $secondsSinceFetch = abs(Carbon::now()->diffInSeconds(Carbon::parse($cachedMeta['last_successful_fetch'])));
                     if ($secondsSinceFetch < self::MIN_FORCE_REFRESH_INTERVAL && $isFreshLock) {
@@ -104,8 +109,7 @@ class GdacsService
         $connectionStatus = 'Connection Failed';
 
         try {
-            $response = Http::withoutVerifying()
-                ->timeout($timeout)
+            $response = Http::timeout($timeout)
                 ->connectTimeout(5)
                 ->withHeaders([
                     'Accept' => 'application/json',
@@ -132,7 +136,7 @@ class GdacsService
 
                 $latestEventTime = null;
                 foreach ($normalizedEvents as $ev) {
-                    if (!empty($ev['event_time']) && ($latestEventTime === null || $ev['event_time'] > $latestEventTime)) {
+                    if (! empty($ev['event_time']) && ($latestEventTime === null || $ev['event_time'] > $latestEventTime)) {
                         $latestEventTime = $ev['event_time'];
                     }
                 }
@@ -143,7 +147,7 @@ class GdacsService
                     'name' => 'Global Disaster Alert and Coordination System (UN / EC JRC)',
                     'status' => 'Live',
                     'freshness_status' => 'Fresh',
-                    'connection_status' => 'Connected (HTTP ' . $response->status() . ')',
+                    'connection_status' => 'Connected (HTTP '.$response->status().')',
                     'last_successful_fetch' => $nowIso,
                     'latest_event_time' => $latestEventTime,
                     'total_features_fetched' => count($features),
@@ -178,8 +182,8 @@ class GdacsService
             Log::warning("GDACS API returned non-200 status: {$status}");
         } catch (Throwable $e) {
             $connectionStatus = 'Timeout / Network Error';
-            $errorReason = 'GDACS request failed: ' . $e->getMessage();
-            Log::error('GDACS API fetch error: ' . $e->getMessage());
+            $errorReason = 'GDACS request failed: '.$e->getMessage();
+            Log::error('GDACS API fetch error: '.$e->getMessage());
         }
 
         // Return stale cache if available
@@ -190,7 +194,7 @@ class GdacsService
             $staleMeta['connection_status'] = "Serving Stale Cache ({$connectionStatus})";
             $staleMeta['is_stale'] = true;
             $staleMeta['is_fresh'] = false;
-            $staleMeta['error'] = $errorReason . ' Serving last verified cached data.';
+            $staleMeta['error'] = $errorReason.' Serving last verified cached data.';
 
             return [
                 'events' => $cached,
@@ -223,7 +227,7 @@ class GdacsService
     }
 
     /**
-     * @param array<string, mixed> $meta
+     * @param  array<string, mixed>  $meta
      * @return array<string, mixed>
      */
     private function refreshMetaTimestamps(array $meta, int $ttl, bool $isFresh): array
@@ -232,7 +236,7 @@ class GdacsService
         $meta['provider_update_frequency'] = 'Every 5–15 minutes (event-driven bulletins)';
         $meta['frontend_poll_interval_seconds'] = 60;
         $meta['is_fresh'] = $isFresh;
-        $meta['is_stale'] = !$isFresh;
+        $meta['is_stale'] = ! $isFresh;
         $meta['freshness_status'] = $isFresh ? 'Fresh' : 'Stale';
         $meta['status'] = $isFresh ? 'Live' : 'Stale';
 
@@ -240,7 +244,7 @@ class GdacsService
     }
 
     /**
-     * @param array<int, array<string, mixed>> $features
+     * @param  array<int, array<string, mixed>>  $features
      * @return array<int, array<string, mixed>>
      */
     private function processFeatures(array $features): array
@@ -248,7 +252,7 @@ class GdacsService
         $events = [];
 
         foreach ($features as $feature) {
-            if (!is_array($feature)) {
+            if (! is_array($feature)) {
                 continue;
             }
 
@@ -292,7 +296,7 @@ class GdacsService
 
             $category = $this->mapEventTypeToCategory($eventType);
             $episodeId = trim((string) ($props['episodeid'] ?? ''));
-            $id = 'gdacs_' . strtolower($eventType) . '_' . $eventId;
+            $id = 'gdacs_'.strtolower($eventType).'_'.$eventId;
 
             // Exact official GDACS alert level: Green, Orange, Red (only when supplied)
             $rawAlertLevel = ucfirst(strtolower(trim((string) ($props['alertlevel'] ?? ''))));
@@ -326,8 +330,8 @@ class GdacsService
             $reportUrl = isset($urlProps['report']) && is_string($urlProps['report']) ? trim($urlProps['report']) : null;
             if (empty($reportUrl)) {
                 $reportUrl = "https://www.gdacs.org/report.aspx?eventid={$eventId}"
-                    . ($episodeId !== '' ? "&episodeid={$episodeId}" : '')
-                    . "&eventtype={$eventType}";
+                    .($episodeId !== '' ? "&episodeid={$episodeId}" : '')
+                    ."&eventtype={$eventType}";
             }
 
             $rawTitle = trim((string) ($props['name'] ?? $props['eventname'] ?? ''));
@@ -378,19 +382,19 @@ class GdacsService
     }
 
     /**
-     * @param array<int, array<string, mixed>> $affectedCountries
+     * @param  array<int, array<string, mixed>>  $affectedCountries
      */
     private function extractLocation(string $countryName, array $affectedCountries, string $matchedCountry): ?string
     {
         $names = [];
         foreach ($affectedCountries as $ac) {
-            if (is_array($ac) && !empty($ac['countryname'])) {
+            if (is_array($ac) && ! empty($ac['countryname'])) {
                 $names[] = trim((string) $ac['countryname']);
             }
         }
         $names = array_values(array_unique(array_filter($names)));
 
-        if (!empty($names)) {
+        if (! empty($names)) {
             return implode(', ', $names);
         }
 
@@ -403,7 +407,7 @@ class GdacsService
 
     private function parseTimestamp(mixed $raw): ?string
     {
-        if (!is_string($raw) || trim($raw) === '') {
+        if (! is_string($raw) || trim($raw) === '') {
             return null;
         }
 
@@ -415,7 +419,7 @@ class GdacsService
     }
 
     /**
-     * @param array<int, array<string, mixed>> $affectedCountries
+     * @param  array<int, array<string, mixed>>  $affectedCountries
      */
     private function matchAseanCountry(string $iso3, string $countryName, array $affectedCountries, ?float $lat, ?float $lng): ?string
     {
@@ -426,6 +430,7 @@ class GdacsService
                 return $mapped;
             }
             $byIso = array_search($iso3, self::COUNTRY_TO_ISO3, true);
+
             return is_string($byIso) ? $byIso : $countryName;
         }
 
@@ -443,13 +448,14 @@ class GdacsService
 
         // 3. Affected countries list
         foreach ($affectedCountries as $ac) {
-            if (!is_array($ac)) {
+            if (! is_array($ac)) {
                 continue;
             }
             $acIso3 = strtoupper(trim((string) ($ac['iso3'] ?? '')));
             $acName = strtolower(trim((string) ($ac['countryname'] ?? '')));
             if (in_array($acIso3, self::ASEAN_ISO3, true)) {
                 $byIso = array_search($acIso3, self::COUNTRY_TO_ISO3, true);
+
                 return self::ASEAN_NAMES[$acName] ?? (is_string($byIso) ? $byIso : ($ac['countryname'] ?? 'Southeast Asia'));
             }
             if (isset(self::ASEAN_NAMES[$acName])) {

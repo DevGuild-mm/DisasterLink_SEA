@@ -11,16 +11,24 @@ use Throwable;
 class NasaEonetService
 {
     private const CACHE_KEY = 'nasa_eonet_events_sea';
+
     private const CACHE_META_KEY = 'nasa_eonet_meta_sea';
+
     private const CACHE_FRESH_KEY = 'nasa_eonet_fresh_lock_sea';
+
     private const DEFAULT_TTL_SECONDS = 900; // 15 minutes
+
     private const STALE_BACKUP_TTL_SECONDS = 86400; // 24 hours backup for stale fallback
+
     private const MIN_FORCE_REFRESH_INTERVAL = 15; // seconds
 
     // Southeast Asia Bounding Box
     private const MIN_LAT = -11.5;
+
     private const MAX_LAT = 28.5;
+
     private const MIN_LNG = 92.0;
+
     private const MAX_LNG = 142.0;
 
     private const CATEGORY_MAP = [
@@ -84,14 +92,14 @@ class NasaEonetService
         $isFreshLock = Cache::has(self::CACHE_FRESH_KEY);
 
         if ($cached !== null && $cachedMeta !== null) {
-            if (!$forceRefresh && $isFreshLock) {
+            if (! $forceRefresh && $isFreshLock) {
                 return [
                     'events' => $cached,
                     'meta' => $this->refreshMetaTimestamps($cachedMeta, $ttl, true),
                 ];
             }
 
-            if ($forceRefresh && !empty($cachedMeta['last_successful_fetch'])) {
+            if ($forceRefresh && ! empty($cachedMeta['last_successful_fetch'])) {
                 try {
                     $secondsSinceFetch = abs(Carbon::now()->diffInSeconds(Carbon::parse($cachedMeta['last_successful_fetch'])));
                     if ($secondsSinceFetch < self::MIN_FORCE_REFRESH_INTERVAL && $isFreshLock) {
@@ -111,8 +119,7 @@ class NasaEonetService
 
         try {
             // EONET API v3 query with bounding box (minLng, minLat, maxLng, maxLat)
-            $response = Http::withoutVerifying()
-                ->timeout($timeout)
+            $response = Http::timeout($timeout)
                 ->connectTimeout(5)
                 ->withHeaders([
                     'Accept' => 'application/json',
@@ -127,7 +134,7 @@ class NasaEonetService
 
             if ($response->successful()) {
                 $data = $response->json();
-                if (!is_array($data) || !isset($data['events']) || !is_array($data['events'])) {
+                if (! is_array($data) || ! isset($data['events']) || ! is_array($data['events'])) {
                     $connectionStatus = 'Invalid Response Format';
                     throw new \RuntimeException('Invalid JSON structure from NASA EONET v3 API.');
                 }
@@ -137,7 +144,7 @@ class NasaEonetService
 
                 $latestEventTime = null;
                 foreach ($normalizedEvents as $ev) {
-                    if (!empty($ev['event_time']) && ($latestEventTime === null || $ev['event_time'] > $latestEventTime)) {
+                    if (! empty($ev['event_time']) && ($latestEventTime === null || $ev['event_time'] > $latestEventTime)) {
                         $latestEventTime = $ev['event_time'];
                     }
                 }
@@ -180,8 +187,8 @@ class NasaEonetService
             if ($connectionStatus === 'Connection Failed') {
                 $connectionStatus = 'Timeout / Network Error';
             }
-            $errorReason = 'NASA EONET fetch failed: ' . $e->getMessage();
-            Log::error('NASA EONET API fetch error: ' . $e->getMessage());
+            $errorReason = 'NASA EONET fetch failed: '.$e->getMessage();
+            Log::error('NASA EONET API fetch error: '.$e->getMessage());
         }
 
         if (is_array($cached) && is_array($cachedMeta)) {
@@ -191,7 +198,7 @@ class NasaEonetService
             $staleMeta['connection_status'] = "Serving Stale Cache ({$connectionStatus})";
             $staleMeta['is_stale'] = true;
             $staleMeta['is_fresh'] = false;
-            $staleMeta['error'] = $errorReason . ' Serving last verified cached data.';
+            $staleMeta['error'] = $errorReason.' Serving last verified cached data.';
 
             return [
                 'events' => $cached,
@@ -223,7 +230,7 @@ class NasaEonetService
     }
 
     /**
-     * @param array<string, mixed> $meta
+     * @param  array<string, mixed>  $meta
      * @return array<string, mixed>
      */
     private function refreshMetaTimestamps(array $meta, int $ttl, bool $isFresh): array
@@ -232,7 +239,7 @@ class NasaEonetService
         $meta['provider_update_frequency'] = 'Sub-daily satellite & partner agency updates';
         $meta['frontend_poll_interval_seconds'] = 60;
         $meta['is_fresh'] = $isFresh;
-        $meta['is_stale'] = !$isFresh;
+        $meta['is_stale'] = ! $isFresh;
         $meta['freshness_status'] = $isFresh ? 'Fresh' : 'Stale';
         $meta['status'] = $isFresh ? 'Live' : 'Stale';
 
@@ -240,7 +247,7 @@ class NasaEonetService
     }
 
     /**
-     * @param array<int, array<string, mixed>> $rawEvents
+     * @param  array<int, array<string, mixed>>  $rawEvents
      * @return array<int, array<string, mixed>>
      */
     private function processEvents(array $rawEvents): array
@@ -248,7 +255,7 @@ class NasaEonetService
         $events = [];
 
         foreach ($rawEvents as $item) {
-            if (!is_array($item)) {
+            if (! is_array($item)) {
                 continue;
             }
 
@@ -260,8 +267,8 @@ class NasaEonetService
 
             // Categories
             $categories = is_array($item['categories'] ?? null) ? $item['categories'] : [];
-            $catId = !empty($categories) && is_array($categories[0]) ? (string) ($categories[0]['id'] ?? '') : '';
-            $catTitle = !empty($categories) && is_array($categories[0]) ? (string) ($categories[0]['title'] ?? 'Natural Event') : 'Natural Event';
+            $catId = ! empty($categories) && is_array($categories[0]) ? (string) ($categories[0]['id'] ?? '') : '';
+            $catTitle = ! empty($categories) && is_array($categories[0]) ? (string) ($categories[0]['title'] ?? 'Natural Event') : 'Natural Event';
             $normalizedCategory = self::CATEGORY_MAP[strtolower($catId)] ?? $catTitle;
 
             // Geometry & date: pick the latest geometry observation supplied by NASA EONET
@@ -274,16 +281,16 @@ class NasaEonetService
             $observations = [];
 
             foreach ($geometryList as $g) {
-                if (is_array($g) && !empty($g['date'])) {
+                if (is_array($g) && ! empty($g['date'])) {
                     $observations[] = [
                         'date' => $g['date'],
                         'magnitude' => isset($g['magnitudeValue']) && is_numeric($g['magnitudeValue']) ? (float) $g['magnitudeValue'] : null,
-                        'unit' => !empty($g['magnitudeUnit']) && is_string($g['magnitudeUnit']) ? trim($g['magnitudeUnit']) : null,
+                        'unit' => ! empty($g['magnitudeUnit']) && is_string($g['magnitudeUnit']) ? trim($g['magnitudeUnit']) : null,
                     ];
                 }
             }
 
-            if (!empty($geometryList)) {
+            if (! empty($geometryList)) {
                 $latestGeom = end($geometryList);
                 if (is_array($latestGeom)) {
                     $eventDate = $latestGeom['date'] ?? null;
@@ -293,7 +300,7 @@ class NasaEonetService
                     if (isset($latestGeom['magnitudeValue']) && is_numeric($latestGeom['magnitudeValue'])) {
                         $magnitudeVal = (float) $latestGeom['magnitudeValue'];
                     }
-                    if (!empty($latestGeom['magnitudeUnit']) && is_string($latestGeom['magnitudeUnit'])) {
+                    if (! empty($latestGeom['magnitudeUnit']) && is_string($latestGeom['magnitudeUnit'])) {
                         $magnitudeUnit = trim($latestGeom['magnitudeUnit']);
                     }
 
@@ -336,7 +343,7 @@ class NasaEonetService
             }
 
             $closedTime = null;
-            if (!empty($item['closed']) && is_string($item['closed'])) {
+            if (! empty($item['closed']) && is_string($item['closed'])) {
                 try {
                     $closedTime = Carbon::parse($item['closed'])->toIso8601String();
                 } catch (Throwable) {
@@ -354,8 +361,8 @@ class NasaEonetService
 
             // Sources
             $sources = is_array($item['sources'] ?? null) ? $item['sources'] : [];
-            $sourceUrl = !empty($sources) && is_array($sources[0]) ? ($sources[0]['url'] ?? null) : null;
-            if (empty($sourceUrl) || !is_string($sourceUrl)) {
+            $sourceUrl = ! empty($sources) && is_array($sources[0]) ? ($sources[0]['url'] ?? null) : null;
+            if (empty($sourceUrl) || ! is_string($sourceUrl)) {
                 $sourceUrl = (string) ($item['link'] ?? "https://eonet.gsfc.nasa.gov/api/v3/events/{$id}");
             }
 
@@ -364,7 +371,7 @@ class NasaEonetService
                 : null;
 
             $events[] = [
-                'id' => 'eonet_' . $id,
+                'id' => 'eonet_'.$id,
                 'source' => 'NASA EONET',
                 'source_id' => $id,
                 'disaster_type' => $normalizedCategory,
@@ -426,7 +433,7 @@ class NasaEonetService
     /**
      * Compute approximate centroid for polygon / multipolygon array.
      *
-     * @param array<mixed> $coords
+     * @param  array<mixed>  $coords
      * @return array{0: float, 1: float}|null
      */
     private function calculateCentroid(array $coords): ?array

@@ -11,10 +11,15 @@ use Throwable;
 class OpenMeteoService
 {
     private const CACHE_KEY = 'open_meteo_weather_sea';
+
     private const CACHE_META_KEY = 'open_meteo_meta_sea';
+
     private const CACHE_FRESH_KEY = 'open_meteo_fresh_lock_sea';
+
     private const DEFAULT_TTL_SECONDS = 900; // 15 minutes
+
     private const STALE_BACKUP_TTL_SECONDS = 86400; // 24 hours backup for stale fallback
+
     private const MIN_FORCE_REFRESH_INTERVAL = 15; // seconds
 
     public const CITIES = [
@@ -155,14 +160,14 @@ class OpenMeteoService
         $isFreshLock = Cache::has(self::CACHE_FRESH_KEY);
 
         if ($cached !== null && $cachedMeta !== null) {
-            if (!$forceRefresh && $isFreshLock) {
+            if (! $forceRefresh && $isFreshLock) {
                 return [
                     'weather' => $cached,
                     'meta' => $this->refreshMetaTimestamps($cachedMeta, $ttl, true),
                 ];
             }
 
-            if ($forceRefresh && !empty($cachedMeta['last_successful_fetch'])) {
+            if ($forceRefresh && ! empty($cachedMeta['last_successful_fetch'])) {
                 try {
                     $secondsSinceFetch = abs(Carbon::now()->diffInSeconds(Carbon::parse($cachedMeta['last_successful_fetch'])));
                     if ($secondsSinceFetch < self::MIN_FORCE_REFRESH_INTERVAL && $isFreshLock) {
@@ -184,8 +189,7 @@ class OpenMeteoService
             $lats = implode(',', array_column(self::CITIES, 'lat'));
             $lngs = implode(',', array_column(self::CITIES, 'lng'));
 
-            $response = Http::withoutVerifying()
-                ->timeout($timeout)
+            $response = Http::timeout($timeout)
                 ->connectTimeout(5)
                 ->withHeaders([
                     'Accept' => 'application/json',
@@ -202,7 +206,7 @@ class OpenMeteoService
 
             if ($response->successful()) {
                 $data = $response->json();
-                if (!is_array($data)) {
+                if (! is_array($data)) {
                     $connectionStatus = 'Invalid Response Format';
                     throw new \RuntimeException('Invalid JSON structure from Open-Meteo API.');
                 }
@@ -214,7 +218,7 @@ class OpenMeteoService
 
                 foreach (self::CITIES as $index => $cityMeta) {
                     $cityData = $items[$index] ?? null;
-                    if (!is_array($cityData) || !isset($cityData['current']) || !is_array($cityData['current'])) {
+                    if (! is_array($cityData) || ! isset($cityData['current']) || ! is_array($cityData['current'])) {
                         continue;
                     }
 
@@ -318,8 +322,8 @@ class OpenMeteoService
             if ($connectionStatus === 'Connection Failed') {
                 $connectionStatus = 'Timeout / Network Error';
             }
-            $errorReason = 'Open-Meteo fetch failed: ' . $e->getMessage();
-            Log::error('Open-Meteo API fetch error: ' . $e->getMessage());
+            $errorReason = 'Open-Meteo fetch failed: '.$e->getMessage();
+            Log::error('Open-Meteo API fetch error: '.$e->getMessage());
         }
 
         if (is_array($cached) && is_array($cachedMeta)) {
@@ -329,7 +333,7 @@ class OpenMeteoService
             $staleMeta['connection_status'] = "Serving Stale Cache ({$connectionStatus})";
             $staleMeta['is_stale'] = true;
             $staleMeta['is_fresh'] = false;
-            $staleMeta['error'] = $errorReason . ' Serving last verified cached data.';
+            $staleMeta['error'] = $errorReason.' Serving last verified cached data.';
 
             return [
                 'weather' => $cached,
@@ -360,7 +364,7 @@ class OpenMeteoService
     }
 
     /**
-     * @param array<string, mixed> $meta
+     * @param  array<string, mixed>  $meta
      * @return array<string, mixed>
      */
     private function refreshMetaTimestamps(array $meta, int $ttl, bool $isFresh): array
@@ -369,7 +373,7 @@ class OpenMeteoService
         $meta['provider_update_frequency'] = 'Every 15–60 minutes (numerical weather model)';
         $meta['frontend_poll_interval_seconds'] = 60;
         $meta['is_fresh'] = $isFresh;
-        $meta['is_stale'] = !$isFresh;
+        $meta['is_stale'] = ! $isFresh;
         $meta['freshness_status'] = $isFresh ? 'Fresh' : 'Stale';
         $meta['status'] = $isFresh ? 'Live' : 'Stale';
 

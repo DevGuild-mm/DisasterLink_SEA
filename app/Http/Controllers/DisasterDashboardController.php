@@ -13,8 +13,7 @@ class DisasterDashboardController extends Controller
 {
     public function __construct(
         protected DisasterDashboardService $dashboardService,
-    ) {
-    }
+    ) {}
 
     /**
      * Display the DisasterLinkSEA Homepage with real-time initial data.
@@ -49,7 +48,7 @@ class DisasterDashboardController extends Controller
     {
         @set_time_limit(120);
         $dashboardData = $this->dashboardService->getDashboardData();
-        $shelters = Shelter::all();
+        $shelters = config('modules.coordination') ? Shelter::all() : [];
 
         return Inertia::render('MapPage', [
             'initialDashboardData' => $dashboardData,

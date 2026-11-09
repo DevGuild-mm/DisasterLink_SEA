@@ -2,22 +2,16 @@
 import { Link, usePage } from '@inertiajs/vue3';
 import {
     AlertCircle,
-    BellRing,
-    ClipboardList,
     Clock,
     CloudSun,
     Database,
     Globe,
     Home,
     LayoutDashboard,
-    LifeBuoy,
-    MapPin,
     Menu,
     Moon,
-    PlusCircle,
     RefreshCw,
     ShieldAlert,
-    ShieldCheck,
     Sun,
     X,
 } from '@lucide/vue';
@@ -63,9 +57,6 @@ function toggleDarkMode() {
 
 const navItems = [
     { name: 'Home', href: '/', icon: Home },
-    { name: 'Early Warning', href: '/intelligence', icon: BellRing },
-    { name: 'Relief & Shelters', href: '/coordination', icon: LifeBuoy },
-    { name: 'Countries', href: '/countries', icon: MapPin },
     { name: 'Disaster Map', href: '/map', icon: Globe },
     { name: 'Live Events', href: '/events', icon: ShieldAlert },
     { name: 'Weather', href: '/weather', icon: CloudSun },
@@ -248,49 +239,6 @@ function formatTime(isoString: string | null): string {
                     />
                     <span class="hidden sm:inline">Refresh</span>
                 </Button>
-
-                <!-- Report Disaster CTA Button -->
-                <Link
-                    href="/reports/create"
-                    class="flex h-8 items-center gap-1.5 rounded-md bg-destructive px-2.5 text-xs font-semibold text-destructive-foreground shadow-sm transition-colors hover:bg-destructive/90"
-                    title="Submit a citizen disaster observation report"
-                >
-                    <PlusCircle class="size-3.5" />
-                    <span class="hidden sm:inline">Report Disaster</span>
-                </Link>
-
-                <!-- My Reports (for authenticated users) -->
-                <Link
-                    v-if="$page.props.auth?.user"
-                    href="/my-reports"
-                    :class="[
-                        'hidden h-8 items-center gap-1.5 rounded-md border border-border/80 px-2.5 text-xs font-medium transition-colors md:inline-flex',
-                        isItemActive('/my-reports')
-                            ? 'border-destructive/30 bg-destructive/10 font-semibold text-foreground'
-                            : 'bg-card text-foreground hover:bg-muted',
-                    ]"
-                    title="View reports submitted by you"
-                >
-                    <ClipboardList class="size-3.5" />
-                    <span class="hidden xl:inline">My Reports</span>
-                </Link>
-
-                <!-- Admin Review Link (for administrators) -->
-                <Link
-                    v-if="$page.props.auth?.user?.role === 'admin'"
-                    href="/admin/reports"
-                    :class="[
-                        'hidden h-8 items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 text-xs font-semibold text-amber-600 transition-colors hover:bg-amber-500/20 md:inline-flex dark:text-amber-400',
-                        isItemActive('/admin/reports')
-                            ? 'ring-1 ring-amber-500'
-                            : '',
-                    ]"
-                    title="Admin Moderation Console"
-                >
-                    <ShieldCheck class="size-3.5" />
-                    <span>Admin Review</span>
-                </Link>
-
                 <!-- Dark Mode / Light Mode Toggle Button -->
                 <Button
                     variant="outline"
@@ -403,45 +351,6 @@ function formatTime(isoString: string | null): string {
                 </Link>
 
                 <div class="my-1 border-t border-border/60"></div>
-
-                <Link
-                    href="/reports/create"
-                    class="flex items-center gap-2.5 rounded-lg bg-destructive px-3 py-2 text-sm font-semibold text-destructive-foreground shadow-sm"
-                    @click="mobileMenuOpen = false"
-                >
-                    <PlusCircle class="size-4 shrink-0" />
-                    <span>Report Disaster</span>
-                </Link>
-
-                <Link
-                    v-if="$page.props.auth?.user"
-                    href="/my-reports"
-                    :class="[
-                        'flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors',
-                        isItemActive('/my-reports')
-                            ? 'bg-destructive/10 font-semibold text-foreground'
-                            : 'font-medium text-muted-foreground hover:bg-muted hover:text-foreground',
-                    ]"
-                    @click="mobileMenuOpen = false"
-                >
-                    <ClipboardList class="size-4 shrink-0" />
-                    <span>My Reports</span>
-                </Link>
-
-                <Link
-                    v-if="$page.props.auth?.user?.role === 'admin'"
-                    href="/admin/reports"
-                    :class="[
-                        'flex items-center gap-2.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm font-semibold text-amber-600 transition-colors dark:text-amber-400',
-                        isItemActive('/admin/reports')
-                            ? 'ring-1 ring-amber-500'
-                            : '',
-                    ]"
-                    @click="mobileMenuOpen = false"
-                >
-                    <ShieldCheck class="size-4 shrink-0" />
-                    <span>Admin Review Panel</span>
-                </Link>
 
                 <!-- Mobile Theme Toggle Row -->
                 <div

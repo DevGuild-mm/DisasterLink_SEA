@@ -11,16 +11,24 @@ use Throwable;
 class UsgsService
 {
     private const CACHE_KEY = 'usgs_earthquakes_sea';
+
     private const CACHE_META_KEY = 'usgs_meta_sea';
+
     private const CACHE_FRESH_KEY = 'usgs_fresh_lock_sea';
+
     private const DEFAULT_TTL_SECONDS = 180; // 3 minutes
+
     private const STALE_BACKUP_TTL_SECONDS = 86400; // 24 hours backup for stale fallback
+
     private const MIN_FORCE_REFRESH_INTERVAL = 15; // seconds
 
     // Southeast Asia Bounding Box
     private const MIN_LAT = -11.5;
+
     private const MAX_LAT = 28.5;
+
     private const MIN_LNG = 92.0;
+
     private const MAX_LNG = 142.0;
 
     private const ASEAN_KEYWORDS = [
@@ -77,14 +85,14 @@ class UsgsService
         $isFreshLock = Cache::has(self::CACHE_FRESH_KEY);
 
         if ($cached !== null && $cachedMeta !== null) {
-            if (!$forceRefresh && $isFreshLock) {
+            if (! $forceRefresh && $isFreshLock) {
                 return [
                     'events' => $cached,
                     'meta' => $this->refreshMetaTimestamps($cachedMeta, $ttl, true),
                 ];
             }
 
-            if ($forceRefresh && !empty($cachedMeta['last_successful_fetch'])) {
+            if ($forceRefresh && ! empty($cachedMeta['last_successful_fetch'])) {
                 try {
                     $secondsSinceFetch = abs(Carbon::now()->diffInSeconds(Carbon::parse($cachedMeta['last_successful_fetch'])));
                     if ($secondsSinceFetch < self::MIN_FORCE_REFRESH_INTERVAL && $isFreshLock) {
@@ -104,8 +112,7 @@ class UsgsService
 
         try {
             // 1. Fetch required primary feed: all_hour.geojson
-            $hourResponse = Http::withoutVerifying()
-                ->timeout($timeout)
+            $hourResponse = Http::timeout($timeout)
                 ->connectTimeout(5)
                 ->withHeaders([
                     'Accept' => 'application/json',
@@ -113,14 +120,14 @@ class UsgsService
                 ])
                 ->get($hourUrl);
 
-            if (!$hourResponse->successful()) {
+            if (! $hourResponse->successful()) {
                 $status = $hourResponse->status();
                 $connectionStatus = $status === 429 ? 'Rate Limited (HTTP 429)' : "Upstream HTTP {$status}";
                 throw new \RuntimeException("USGS all_hour.geojson returned HTTP {$status}");
             }
 
             $hourJson = $hourResponse->json();
-            if (!is_array($hourJson) || !isset($hourJson['features']) || !is_array($hourJson['features'])) {
+            if (! is_array($hourJson) || ! isset($hourJson['features']) || ! is_array($hourJson['features'])) {
                 $connectionStatus = 'Invalid Response Format';
                 throw new \RuntimeException('Invalid GeoJSON structure from USGS all_hour.geojson');
             }
@@ -132,8 +139,7 @@ class UsgsService
             $featuresWeek = [];
             $eventsWeek = [];
             try {
-                $weekResponse = Http::withoutVerifying()
-                    ->timeout($timeout)
+                $weekResponse = Http::timeout($timeout)
                     ->connectTimeout(5)
                     ->withHeaders([
                         'Accept' => 'application/json',
@@ -149,7 +155,7 @@ class UsgsService
                     }
                 }
             } catch (Throwable $weekErr) {
-                Log::warning('USGS supplementary week feed failed: ' . $weekErr->getMessage());
+                Log::warning('USGS supplementary week feed failed: '.$weekErr->getMessage());
             }
 
             // Merge with all_hour.geojson taking precedence, deduplicating by source_id
@@ -158,7 +164,7 @@ class UsgsService
                 $allEventsMap[$ev['source_id']] = $ev;
             }
             foreach ($eventsWeek as $ev) {
-                if (!isset($allEventsMap[$ev['source_id']])) {
+                if (! isset($allEventsMap[$ev['source_id']])) {
                     $allEventsMap[$ev['source_id']] = $ev;
                 }
             }
@@ -172,7 +178,7 @@ class UsgsService
             // Keep top 30 most recent earthquakes in the region
             $finalEvents = array_slice($mergedEvents, 0, 30);
 
-            $latestEventTime = !empty($finalEvents) ? ($finalEvents[0]['event_time'] ?? null) : null;
+            $latestEventTime = ! empty($finalEvents) ? ($finalEvents[0]['event_time'] ?? null) : null;
             $nowIso = Carbon::now()->toIso8601String();
 
             $meta = [
@@ -206,8 +212,8 @@ class UsgsService
             if ($connectionStatus === 'Connection Failed') {
                 $connectionStatus = 'Timeout / Network Error';
             }
-            $errorReason = 'USGS feed error: ' . $e->getMessage();
-            Log::error('USGS API fetch error: ' . $e->getMessage());
+            $errorReason = 'USGS feed error: '.$e->getMessage();
+            Log::error('USGS API fetch error: '.$e->getMessage());
         }
 
         // Return stale cache if available
@@ -218,7 +224,7 @@ class UsgsService
             $staleMeta['connection_status'] = "Serving Stale Cache ({$connectionStatus})";
             $staleMeta['is_stale'] = true;
             $staleMeta['is_fresh'] = false;
-            $staleMeta['error'] = $errorReason . ' Serving last verified cached data.';
+            $staleMeta['error'] = $errorReason.' Serving last verified cached data.';
 
             return [
                 'events' => $cached,
@@ -250,7 +256,7 @@ class UsgsService
     }
 
     /**
-     * @param array<string, mixed> $meta
+     * @param  array<string, mixed>  $meta
      * @return array<string, mixed>
      */
     private function refreshMetaTimestamps(array $meta, int $ttl, bool $isFresh): array
@@ -259,7 +265,7 @@ class UsgsService
         $meta['provider_update_frequency'] = 'Every 1 minute (all_hour.geojson feed)';
         $meta['frontend_poll_interval_seconds'] = 60;
         $meta['is_fresh'] = $isFresh;
-        $meta['is_stale'] = !$isFresh;
+        $meta['is_stale'] = ! $isFresh;
         $meta['freshness_status'] = $isFresh ? 'Fresh' : 'Stale';
         $meta['status'] = $isFresh ? 'Live' : 'Stale';
 
@@ -267,7 +273,7 @@ class UsgsService
     }
 
     /**
-     * @param array<int, array<string, mixed>> $features
+     * @param  array<int, array<string, mixed>>  $features
      * @return array<int, array<string, mixed>>
      */
     private function filterAndNormalizeFeatures(array $features): array
@@ -275,7 +281,7 @@ class UsgsService
         $events = [];
 
         foreach ($features as $f) {
-            if (!is_array($f)) {
+            if (! is_array($f)) {
                 continue;
             }
 
@@ -286,7 +292,7 @@ class UsgsService
 
             $geom = is_array($f['geometry'] ?? null) ? $f['geometry'] : [];
             $coords = $geom['coordinates'] ?? [];
-            if (!is_array($coords) || count($coords) < 2 || !is_numeric($coords[0]) || !is_numeric($coords[1])) {
+            if (! is_array($coords) || count($coords) < 2 || ! is_numeric($coords[0]) || ! is_numeric($coords[1])) {
                 continue;
             }
 
@@ -329,9 +335,9 @@ class UsgsService
                 }
             }
 
-            $severityText = $mag !== null ? 'Magnitude ' . number_format($mag, 1) . 'M' : null;
+            $severityText = $mag !== null ? 'Magnitude '.number_format($mag, 1).'M' : null;
             $severityDisplay = $mag !== null
-                ? 'M ' . number_format($mag, 1) . ($severityLevel ? " ({$severityLevel})" : '')
+                ? 'M '.number_format($mag, 1).($severityLevel ? " ({$severityLevel})" : '')
                 : $severityLevel;
 
             // Timestamp in milliseconds -> ISO8601 (never invent timestamps)
@@ -348,7 +354,7 @@ class UsgsService
             $title = trim((string) ($props['title'] ?? ''));
             if ($title === '') {
                 $title = $mag !== null
-                    ? "M {$mag} Earthquake" . ($place !== '' ? " - {$place}" : '')
+                    ? "M {$mag} Earthquake".($place !== '' ? " - {$place}" : '')
                     : 'Seismic Event';
             }
 
@@ -366,19 +372,19 @@ class UsgsService
             if ($depthKm !== null) {
                 $descParts[] = "Depth: {$depthKm} km";
             }
-            if (!empty($props['tsunami'])) {
+            if (! empty($props['tsunami'])) {
                 $descParts[] = 'Tsunami Advisory Flagged';
             }
 
             $events[] = [
-                'id' => 'usgs_' . $id,
+                'id' => 'usgs_'.$id,
                 'source' => 'USGS',
                 'source_id' => $id,
                 'disaster_type' => 'Earthquake',
                 'category' => 'Earthquake',
                 'raw_type' => (string) ($props['type'] ?? 'earthquake'),
                 'title' => $title,
-                'description' => !empty($descParts) ? implode(' • ', $descParts) : null,
+                'description' => ! empty($descParts) ? implode(' • ', $descParts) : null,
                 'country' => $country,
                 'location' => $place !== '' ? $place : null,
                 'iso3' => $iso3,

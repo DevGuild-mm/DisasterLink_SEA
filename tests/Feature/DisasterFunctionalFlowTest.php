@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 
 beforeEach(function () {
+    config(['modules.countries' => true, 'modules.intelligence' => true, 'modules.coordination' => true, 'modules.reports' => true]);
     Cache::flush();
 });
 

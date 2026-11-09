@@ -1,13 +1,11 @@
 <?php
 
-use App\Models\DisasterReport;
-use App\Models\User;
-use App\Services\Disaster\DisasterDashboardService;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 
 beforeEach(function () {
+    config(['modules.countries' => true]);
     Cache::flush();
 });
 

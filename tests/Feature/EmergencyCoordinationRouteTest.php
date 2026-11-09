@@ -1,7 +1,6 @@
 <?php
 
 use App\Models\Shelter;
-use App\Models\User;
 use App\Services\Disaster\GdacsService;
 use App\Services\Disaster\NasaEonetService;
 use App\Services\Disaster\OpenMeteoService;
@@ -12,6 +11,7 @@ use Inertia\Testing\AssertableInertia as Assert;
 uses(RefreshDatabase::class);
 
 beforeEach(function () {
+    config(['modules.coordination' => true]);
     $mockMeta = fn (string $source) => [
         'source' => $source,
         'name' => strtoupper($source),
@@ -55,8 +55,8 @@ test('GET /coordination renders Inertia EmergencyCoordinationPage with complete 
             ->has('coordination.shelters')
             ->has('coordination.resources')
             ->has('coordination.routes')
-            ->has('coordination.rescue_requests')
-            ->has('coordination.volunteers')
+            ->missing('coordination.rescue_requests')
+            ->missing('coordination.volunteers')
             ->has('initialDashboardData')
             ->has('filters')
         );
@@ -82,8 +82,6 @@ test('GET /api/coordination returns complete JSON coordination payload', functio
             'map_locations',
             'resources',
             'routes',
-            'rescue_requests',
-            'volunteers',
             'countries',
         ]);
 });
