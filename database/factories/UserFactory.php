@@ -34,6 +34,26 @@ class UserFactory extends Factory
     }
 
     /**
+     * Indicate that the user is an administrator.
+     */
+    public function admin(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'role' => 'admin',
+        ]);
+    }
+
+    /**
+     * Indicate that the user has opted out of alert emails.
+     */
+    public function alertsDisabled(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'alerts_enabled' => false,
+        ]);
+    }
+
+    /**
      * Indicate that the model's email address should be unverified.
      */
     public function unverified(): static
