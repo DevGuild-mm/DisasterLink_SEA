@@ -3,6 +3,8 @@
 namespace App\Services\Disaster\Sync;
 
 use Carbon\CarbonImmutable;
+use Illuminate\Http\Client\Response;
+use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
@@ -28,28 +30,31 @@ class GdacsClient extends SourceClient
     {
         $now = CarbonImmutable::now('UTC');
 
-        $response = $this->send([
+        $base = [
             'eventlist' => $this->config('event_types'),
             'fromdate' => $now->subDays((int) $this->config('lookback_days', 7))->toDateString(),
             'todate' => $now->toDateString(),
-        ]);
+        ];
 
-        // GDACS answers 204 / an empty body when nothing matches: a successful, empty run.
-        if ($response->status() === 204 || trim($response->body()) === '') {
-            return new FetchResult([], 0, 0, $response->status());
-        }
+        // Orange/Red are the events that can trigger alerts, so a failure here fails the run.
+        [$features, $status] = $this->fetchLevel('orange;red', $base, 3);
 
-        $data = $response->json();
+        // Green events only feed the Green -> Orange escalation rule, so a failure here is not fatal.
+        try {
+            [$green] = $this->fetchLevel('green', $base, (int) $this->config('max_green_pages', 8));
 
-        if (! is_array($data) || ! isset($data['features']) || ! is_array($data['features'])) {
-            throw new SourceFetchException('GDACS returned an unexpected response shape.', $response->status());
+            foreach ($green as $key => $feature) {
+                $features[$key] ??= $feature;
+            }
+        } catch (SourceFetchException $e) {
+            Log::warning('GDACS Green events could not be fetched, continuing with Orange/Red: '.$e->getMessage());
         }
 
         $events = [];
         $skipped = 0;
 
-        foreach ($data['features'] as $feature) {
-            $event = is_array($feature) ? $this->normalize($feature) : null;
+        foreach ($features as $feature) {
+            $event = $this->normalize($feature);
 
             if ($event === null) {
                 $skipped++;
@@ -60,7 +65,82 @@ class GdacsClient extends SourceClient
             $events[] = $event;
         }
 
-        return new FetchResult($events, count($data['features']), $skipped, $response->status());
+        return new FetchResult($events, count($features), $skipped, $status);
+    }
+
+    /**
+     * Fetch one alert level, page by page, until a short or empty page, a page with nothing new, or the page cap.
+     *
+     * @param  array<string, mixed>  $base
+     * @return array{0: array<int|string, array<string, mixed>>, 1: int|null} features keyed by event key, last HTTP status
+     */
+    private function fetchLevel(string $level, array $base, int $maxPages): array
+    {
+        $pageSize = (int) $this->config('page_size', 100);
+        $collected = [];
+        $status = null;
+
+        for ($page = 1; $page <= $maxPages; $page++) {
+            $response = $this->send($base + ['alertlevel' => $level, 'pagenumber' => $page]);
+            $status = $response->status();
+            $pageFeatures = $this->featuresFrom($response);
+
+            if ($pageFeatures === []) {
+                break;
+            }
+
+            $added = 0;
+
+            foreach ($pageFeatures as $feature) {
+                $key = $this->featureKey($feature) ?? 'n'.count($collected);
+
+                if (! isset($collected[$key])) {
+                    $collected[$key] = $feature;
+                    $added++;
+                }
+            }
+
+            if (count($pageFeatures) < $pageSize || $added === 0) {
+                break;
+            }
+
+            if ($page === $maxPages) {
+                Log::warning("GDACS {$level} results may be truncated after {$maxPages} pages.");
+            }
+        }
+
+        return [$collected, $status];
+    }
+
+    /**
+     * GDACS answers 204 / an empty body when nothing matches: that is an empty page, not an error.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function featuresFrom(Response $response): array
+    {
+        if ($response->status() === 204 || trim($response->body()) === '') {
+            return [];
+        }
+
+        $data = $response->json();
+
+        if (! is_array($data) || ! isset($data['features']) || ! is_array($data['features'])) {
+            throw new SourceFetchException('GDACS returned an unexpected response shape.', $response->status());
+        }
+
+        return array_values(array_filter($data['features'], 'is_array'));
+    }
+
+    /**
+     * @param  array<string, mixed>  $feature
+     */
+    private function featureKey(array $feature): ?string
+    {
+        $type = strtoupper(trim((string) ($feature['properties']['eventtype'] ?? '')));
+        $id = trim((string) ($feature['properties']['eventid'] ?? ''));
+
+        return $type !== '' && $id !== '' ? $type.':'.$id : null;
     }
 
     /**

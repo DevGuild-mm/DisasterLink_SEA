@@ -5,12 +5,14 @@ use App\Models\DisasterEvent;
 use App\Models\SyncRun;
 use App\Services\Disaster\Sync\DisasterSyncService;
 use App\Services\Disaster\Sync\SafeUrl;
+use Carbon\CarbonInterval;
 use Database\Seeders\DataSourceSeeder;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Sleep;
 
 const GDACS_URL = 'https://www.gdacs.org/gdacsapi/api/events/geteventlist/SEARCH*';
@@ -59,6 +61,41 @@ function gdacsFeature(array $overrides = []): array
 function gdacsResponse(array $features): array
 {
     return ['type' => 'FeatureCollection', 'features' => $features];
+}
+
+/**
+ * A feed the GDACS fake serves: Orange/Red as one page, Green as a list of pages.
+ *
+ * @param  array<int, array<string, mixed>>  $orangeRed
+ * @param  array<int, array<int, array<string, mixed>>>  $greenPages
+ */
+function gdacsFeed(array $orangeRed = [], array $greenPages = []): ArrayObject
+{
+    return new ArrayObject(['orange_red' => $orangeRed, 'green' => $greenPages]);
+}
+
+function fakeGdacs(ArrayObject $feed): void
+{
+    Http::fake([GDACS_URL => function (Request $request) use ($feed) {
+        parse_str((string) parse_url($request->url(), PHP_URL_QUERY), $query);
+
+        $features = $query['alertlevel'] === 'green'
+            ? ($feed['green'][(int) $query['pagenumber'] - 1] ?? [])
+            : ((int) $query['pagenumber'] === 1 ? $feed['orange_red'] : []);
+
+        return $features === [] ? Http::response('', 204) : Http::response(gdacsResponse($features));
+    }]);
+}
+
+/**
+ * @return array<int, array<string, mixed>>
+ */
+function gdacsFeatures(int $count, int $firstId = 1, string $level = 'Green'): array
+{
+    return array_map(
+        fn (int $id) => gdacsFeature(['properties' => ['eventid' => $id, 'alertlevel' => $level]]),
+        range($firstId, $firstId + $count - 1),
+    );
 }
 
 /**
@@ -180,14 +217,14 @@ test('running a sync twice creates no duplicates and keeps first_seen_at', funct
 });
 
 test('a later sync updates the alert level in place without touching country or alert fields', function () {
-    Http::fake([GDACS_URL => Http::sequence()
-        ->push(gdacsResponse([gdacsFeature(['properties' => ['alertlevel' => 'Green']])]))
-        ->push(gdacsResponse([gdacsFeature(['properties' => ['alertlevel' => 'Orange', 'episodeid' => 11]])])),
-    ]);
+    $feed = gdacsFeed(greenPages: [[gdacsFeature(['properties' => ['alertlevel' => 'Green']])]]);
+    fakeGdacs($feed);
 
     app(DisasterSyncService::class)->sync('gdacs');
     DisasterEvent::first()->update(['alert_status' => 'pending', 'country_status' => 'resolved', 'country_method' => 'source_code']);
 
+    $feed['orange_red'] = [gdacsFeature(['properties' => ['alertlevel' => 'Orange', 'episodeid' => 11]])];
+    $feed['green'] = [];
     app(DisasterSyncService::class)->sync('gdacs');
 
     $event = DisasterEvent::first();
@@ -328,7 +365,8 @@ test('a rate limit or server error is retried and a later success is recorded', 
     Http::fake([GDACS_URL => Http::sequence()
         ->push('slow down', 429)
         ->push('oops', 503)
-        ->push(gdacsResponse([gdacsFeature()])),
+        ->push(gdacsResponse([gdacsFeature()]))
+        ->whenEmpty(Http::response('', 204)),
     ]);
 
     $run = app(DisasterSyncService::class)->sync('gdacs');
@@ -336,7 +374,7 @@ test('a rate limit or server error is retried and a later success is recorded', 
     expect($run->status)->toBe('success')
         ->and(DisasterEvent::count())->toBe(1);
 
-    Http::assertSentCount(3);
+    Http::assertSentCount(4);
     Sleep::assertSleptTimes(2);
 });
 
@@ -422,7 +460,7 @@ test('syncing never calls NASA EONET', function () {
     $this->artisan('disaster:sync')->assertSuccessful();
 
     Http::assertNotSent(fn (Request $request) => str_contains($request->url(), 'eonet'));
-    Http::assertSentCount(2);
+    Http::assertSentCount(3);
 });
 
 test('the sync command reports success and failure through its exit code', function () {
@@ -474,3 +512,184 @@ test('source urls are validated before they are stored', function (?string $inpu
     'empty' => ['', null],
     'null' => [null, null],
 ]);
+
+test('gdacs fetches orange/red and green as separate requests using the eventlist filter', function () {
+    fakeGdacs(gdacsFeed([gdacsFeature()]));
+
+    app(DisasterSyncService::class)->sync('gdacs');
+
+    $levels = Http::recorded()->map(function (array $pair) {
+        parse_str((string) parse_url($pair[0]->url(), PHP_URL_QUERY), $query);
+
+        return [$query['alertlevel'], $query['pagenumber'], $query['eventlist']];
+    })->all();
+
+    expect($levels)->toBe([
+        ['orange;red', '1', 'EQ;TC;FL;VO;WF;DR'],
+        ['green', '1', 'EQ;TC;FL;VO;WF;DR'],
+    ]);
+
+    Http::assertNotSent(fn (Request $request) => str_contains($request->url(), 'eventtypes'));
+});
+
+test('green events are paged until a short page', function () {
+    fakeGdacs(gdacsFeed(greenPages: [gdacsFeatures(100, 1), gdacsFeatures(30, 101)]));
+
+    $run = app(DisasterSyncService::class)->sync('gdacs');
+
+    expect($run->fetched_count)->toBe(130)
+        ->and(DisasterEvent::count())->toBe(130);
+
+    Http::assertSentCount(3);
+});
+
+test('paging stops when a page adds nothing new', function () {
+    $page = gdacsFeatures(100, 1);
+    fakeGdacs(gdacsFeed(greenPages: [$page, $page, $page, $page]));
+
+    app(DisasterSyncService::class)->sync('gdacs');
+
+    expect(DisasterEvent::count())->toBe(100);
+
+    Http::assertSentCount(3);
+});
+
+test('green paging respects the page cap and logs a truncation warning', function () {
+    Log::spy();
+    config(['disaster_sources.sources.gdacs.max_green_pages' => 2]);
+    fakeGdacs(gdacsFeed(greenPages: [gdacsFeatures(100, 1), gdacsFeatures(100, 101), gdacsFeatures(100, 201)]));
+
+    app(DisasterSyncService::class)->sync('gdacs');
+
+    expect(DisasterEvent::count())->toBe(200);
+
+    Http::assertSentCount(3);
+    Log::shouldHaveReceived('warning')->withArgs(fn (string $message) => str_contains($message, 'truncated'))->once();
+});
+
+test('an event present at both levels is stored with its Orange/Red version', function () {
+    fakeGdacs(gdacsFeed(
+        [gdacsFeature(['properties' => ['alertlevel' => 'Orange']])],
+        [[gdacsFeature(['properties' => ['alertlevel' => 'Green']])]],
+    ));
+
+    app(DisasterSyncService::class)->sync('gdacs');
+
+    expect(DisasterEvent::count())->toBe(1)
+        ->and(DisasterEvent::first()->alert_level)->toBe('Orange');
+});
+
+test('a failed green request does not fail the run or lose Orange/Red events', function () {
+    Log::spy();
+    Http::fake([GDACS_URL => function (Request $request) {
+        parse_str((string) parse_url($request->url(), PHP_URL_QUERY), $query);
+
+        return $query['alertlevel'] === 'green'
+            ? Http::response('down', 500)
+            : Http::response(gdacsResponse([gdacsFeature(['properties' => ['alertlevel' => 'Red']])]));
+    }]);
+
+    $run = app(DisasterSyncService::class)->sync('gdacs');
+
+    expect($run->status)->toBe('success')
+        ->and(DisasterEvent::count())->toBe(1)
+        ->and(DisasterEvent::first()->alert_level)->toBe('Red');
+
+    Log::shouldHaveReceived('warning')->withArgs(fn (string $message) => str_contains($message, 'Green events could not be fetched'))->once();
+});
+
+test('a failed Orange/Red request fails the whole run', function () {
+    Http::fake([GDACS_URL => function (Request $request) {
+        parse_str((string) parse_url($request->url(), PHP_URL_QUERY), $query);
+
+        return $query['alertlevel'] === 'green'
+            ? Http::response(gdacsResponse(gdacsFeatures(3)))
+            : Http::response('down', 500);
+    }]);
+
+    $run = app(DisasterSyncService::class)->sync('gdacs');
+
+    expect($run->status)->toBe('failed')
+        ->and(DisasterEvent::count())->toBe(0);
+
+    Http::assertSentCount(3);
+});
+
+test('Retry-After seconds on a 429 are honoured exactly', function () {
+    Http::fake([GDACS_URL => Http::sequence()
+        ->push('', 429, ['Retry-After' => '3'])
+        ->push(gdacsResponse([gdacsFeature()]))
+        ->whenEmpty(Http::response('', 204)),
+    ]);
+
+    $run = app(DisasterSyncService::class)->sync('gdacs');
+
+    expect($run->status)->toBe('success');
+
+    Sleep::assertSleptTimes(1);
+    Sleep::assertSlept(fn (CarbonInterval $duration) => (int) $duration->totalMilliseconds === 3000, 1);
+});
+
+test('Retry-After as an HTTP date is honoured', function () {
+    $this->freezeTime();
+
+    Http::fake([USGS_URL => Http::sequence()
+        ->push('', 429, ['Retry-After' => now()->addSeconds(5)->utc()->toRfc7231String()])
+        ->push(usgsResponse([usgsFeature('us1')])),
+    ]);
+
+    $run = app(DisasterSyncService::class)->sync('usgs');
+
+    expect($run->status)->toBe('success');
+
+    Sleep::assertSlept(fn (CarbonInterval $duration) => (int) $duration->totalMilliseconds === 5000, 1);
+});
+
+test('a 429 without Retry-After uses the configured delay', function () {
+    Http::fake([USGS_URL => Http::sequence()
+        ->push('', 429)
+        ->push(usgsResponse([usgsFeature('us1')])),
+    ]);
+
+    app(DisasterSyncService::class)->sync('usgs');
+
+    Sleep::assertSlept(fn (CarbonInterval $duration) => (int) $duration->totalMilliseconds === 2000, 1);
+});
+
+test('a Retry-After longer than the cap is not waited for and fails the run', function () {
+    Http::fake([GDACS_URL => Http::sequence()
+        ->push('', 429, ['Retry-After' => '120'])
+        ->push(gdacsResponse([gdacsFeature()])),
+    ]);
+
+    $run = app(DisasterSyncService::class)->sync('gdacs');
+
+    expect($run->status)->toBe('failed')
+        ->and($run->http_status)->toBe(429)
+        ->and($run->error_message)->toContain('Retry-After 120s')
+        ->and(DisasterEvent::count())->toBe(0);
+
+    Http::assertSentCount(1);
+    Sleep::assertNeverSlept();
+});
+
+test('Retry-After is capped by configuration and an invalid value falls back to the delays', function () {
+    config([
+        'disaster_sources.max_retry_after_seconds' => 5,
+        'disaster_sources.sources.usgs.retry_delays_ms' => [100, 777],
+    ]);
+
+    Http::fake([USGS_URL => Http::sequence()
+        ->push('', 429, ['Retry-After' => '5'])
+        ->push('', 429, ['Retry-After' => 'soon'])
+        ->push(usgsResponse([usgsFeature('us1')])),
+    ]);
+
+    $run = app(DisasterSyncService::class)->sync('usgs');
+
+    expect($run->status)->toBe('success');
+
+    Sleep::assertSleptTimes(2);
+    Sleep::assertSlept(fn (CarbonInterval $duration) => (int) $duration->totalMilliseconds === 5000, 1);
+    Sleep::assertSlept(fn (CarbonInterval $duration) => (int) $duration->totalMilliseconds === 777, 1);
+});

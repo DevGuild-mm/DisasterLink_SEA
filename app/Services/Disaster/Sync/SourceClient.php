@@ -6,6 +6,7 @@ use Carbon\CarbonImmutable;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\Client\Response;
+use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use Throwable;
@@ -23,7 +24,11 @@ abstract class SourceClient
     abstract public function fetch(): FetchResult;
 
     /**
-     * Send a GET request with TLS verification on, timeouts and limited retries (connection errors, 429, 5xx).
+     * Send a GET request with TLS verification on, timeouts and limited retries.
+     *
+     * Retried: connection errors, HTTP 5xx and HTTP 429. For a 429 the Retry-After header is honoured
+     * (seconds or an HTTP date), unless it exceeds `max_retry_after_seconds`, in which case it is not retried.
+     * Other waits use `retry_delays_ms`.
      *
      * @param  array<string, mixed>  $query
      *
@@ -31,6 +36,9 @@ abstract class SourceClient
      */
     protected function send(array $query = []): Response
     {
+        /** @var array<int, int> $delays */
+        $delays = array_values((array) $this->config('retry_delays_ms', []));
+
         try {
             $response = Http::timeout((int) $this->config('timeout', 15))
                 ->connectTimeout((int) $this->config('connect_timeout', 5))
@@ -39,10 +47,9 @@ abstract class SourceClient
                     'User-Agent' => (string) config('disaster_sources.user_agent'),
                 ])
                 ->retry(
-                    (array) $this->config('retry_delays_ms', []),
-                    when: fn (Throwable $e): bool => $e instanceof ConnectionException
-                        || ($e instanceof RequestException
-                            && ($e->response->status() === 429 || $e->response->serverError())),
+                    count($delays) + 1,
+                    fn (int $attempt, mixed $e): int => $this->retryDelayMs($attempt, $e, $delays),
+                    when: fn (Throwable $e): bool => $this->shouldRetry($e),
                     throw: false,
                 )
                 ->get((string) $this->config('url'), $query);
@@ -51,10 +58,75 @@ abstract class SourceClient
         }
 
         if (! $response->successful()) {
-            throw new SourceFetchException($this->key().' returned HTTP '.$response->status().'.', $response->status());
+            $retryAfter = $response->status() === 429 ? $this->retryAfterSeconds($response) : null;
+
+            throw new SourceFetchException(
+                $this->key().' returned HTTP '.$response->status().($retryAfter !== null ? " (Retry-After {$retryAfter}s)" : '').'.',
+                $response->status(),
+            );
         }
 
         return $response;
+    }
+
+    private function shouldRetry(Throwable $e): bool
+    {
+        if ($e instanceof ConnectionException) {
+            return true;
+        }
+
+        if (! $e instanceof RequestException) {
+            return false;
+        }
+
+        if ($e->response->status() === 429) {
+            $retryAfter = $this->retryAfterSeconds($e->response);
+
+            return $retryAfter === null || $retryAfter <= $this->maxRetryAfterSeconds();
+        }
+
+        return $e->response->serverError();
+    }
+
+    /**
+     * @param  array<int, int>  $delays
+     */
+    private function retryDelayMs(int $attempt, mixed $exception, array $delays): int
+    {
+        if ($exception instanceof RequestException && $exception->response->status() === 429) {
+            $retryAfter = $this->retryAfterSeconds($exception->response);
+
+            if ($retryAfter !== null) {
+                return min($retryAfter, $this->maxRetryAfterSeconds()) * 1000;
+            }
+        }
+
+        return $delays[$attempt - 1] ?? ($delays === [] ? 0 : end($delays));
+    }
+
+    /**
+     * Retry-After as whole seconds from now. Accepts delay-seconds or an HTTP date; null when absent or invalid.
+     */
+    private function retryAfterSeconds(Response $response): ?int
+    {
+        $header = trim($response->header('Retry-After'));
+
+        if ($header === '') {
+            return null;
+        }
+
+        if (ctype_digit($header)) {
+            return (int) $header;
+        }
+
+        $timestamp = strtotime($header);
+
+        return $timestamp === false ? null : max(0, $timestamp - Date::now()->getTimestamp());
+    }
+
+    private function maxRetryAfterSeconds(): int
+    {
+        return (int) config('disaster_sources.max_retry_after_seconds', 30);
     }
 
     protected function config(string $key, mixed $default = null): mixed
