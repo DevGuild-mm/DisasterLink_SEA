@@ -6,6 +6,7 @@
         "build": "vp build",
         "build:ssr": "vp build && vp build --ssr",
         "dev": "vp dev",
+        "start": "concurrently -c \"#93c5fd,#fdba74\" \"php artisan serve --host=127.0.0.1 --port=8000\" \"vp dev\" --names=laravel,vite --kill-others",
         "check": "vp check",
         "check:fix": "vp check --fix",
         "types:check": "vue-tsc --noEmit"

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Head } from '@inertiajs/vue3';
+import { Head, Link } from '@inertiajs/vue3';
 import { AlertTriangle, ExternalLink, RefreshCw } from '@lucide/vue';
 import { ref } from 'vue';
 import { Badge } from '@/components/ui/badge';
@@ -24,14 +24,19 @@ const props = defineProps<{
 const {
     data,
     isRefreshing,
+    isLoading,
     syncError,
     countdown,
     isTabVisible,
+    hasStaleSources,
+    hasUnavailableSources,
     fetchDashboardData,
 } = useDisasterTelemetry(props.initialDashboardData);
 
 const selectedCountry = ref<string>('All');
 const selectedCategory = ref<string>('all');
+const selectedSeverity = ref<string>('all');
+const selectedDateRange = ref<string>('all');
 const activeModalEvent = ref<DisasterEvent | null>(null);
 
 function handleSelectEvent(event: DisasterEvent) {
@@ -56,7 +61,10 @@ function handleSelectEvent(event: DisasterEvent) {
             :countdown="countdown"
             :is-tab-visible="isTabVisible"
             :active-alerts-count="data.summary?.total_active_alerts?.count || 0"
-            @refresh="fetchDashboardData"
+            :has-stale-sources="hasStaleSources"
+            :has-unavailable-sources="hasUnavailableSources"
+            :sync-error="syncError"
+            @refresh="fetchDashboardData(true)"
         />
 
         <!-- Resilient API Error / Retry Banner -->
@@ -76,7 +84,7 @@ function handleSelectEvent(event: DisasterEvent) {
                     size="sm"
                     class="h-7 cursor-pointer gap-1 border-amber-500/40 bg-transparent text-xs"
                     :disabled="isRefreshing"
-                    @click="fetchDashboardData"
+                    @click="fetchDashboardData(true)"
                 >
                     <RefreshCw
                         :class="['size-3', isRefreshing && 'animate-spin']"
@@ -94,8 +102,14 @@ function handleSelectEvent(event: DisasterEvent) {
                     :countries="data.countries"
                     :selected-country="selectedCountry"
                     :selected-category="selectedCategory"
+                    :selected-severity="selectedSeverity"
+                    :selected-date-range="selectedDateRange"
+                    :is-loading="isLoading"
+                    :sources="data.sources"
                     @update:selected-country="selectedCountry = $event"
                     @update:selected-category="selectedCategory = $event"
+                    @update:selected-severity="selectedSeverity = $event"
+                    @update:selected-date-range="selectedDateRange = $event"
                     @select-event="handleSelectEvent"
                 />
             </div>
@@ -155,21 +169,41 @@ function handleSelectEvent(event: DisasterEvent) {
                         <div>
                             <span
                                 class="block text-[10px] text-muted-foreground"
-                                >Location:</span
+                                >Country:</span
                             >
                             <strong>{{ activeModalEvent.country }}</strong>
+                        </div>
+                        <div v-if="activeModalEvent.location">
+                            <span
+                                class="block text-[10px] text-muted-foreground"
+                                >Location:</span
+                            >
+                            <strong>{{ activeModalEvent.location }}</strong>
                         </div>
                         <div>
                             <span
                                 class="block text-[10px] text-muted-foreground"
-                                >Recorded Time:</span
+                                >Event Date:</span
                             >
                             <strong>{{
+                                activeModalEvent.event_date ||
                                 activeModalEvent.event_time
                                     ? new Date(
-                                          activeModalEvent.event_time,
+                                          (activeModalEvent.event_date ||
+                                              activeModalEvent.event_time)!,
                                       ).toLocaleString()
-                                    : 'N/A'
+                                    : 'Not supplied'
+                            }}</strong>
+                        </div>
+                        <div v-if="activeModalEvent.last_updated_time">
+                            <span
+                                class="block text-[10px] text-muted-foreground"
+                                >Last Updated:</span
+                            >
+                            <strong>{{
+                                new Date(
+                                    activeModalEvent.last_updated_time,
+                                ).toLocaleString()
                             }}</strong>
                         </div>
                         <div v-if="activeModalEvent.magnitude">
@@ -178,6 +212,21 @@ function handleSelectEvent(event: DisasterEvent) {
                                 >Magnitude:</span
                             >
                             <strong>M {{ activeModalEvent.magnitude }}</strong>
+                        </div>
+                        <div
+                            v-else-if="
+                                activeModalEvent.severity ||
+                                activeModalEvent.severity_text
+                            "
+                        >
+                            <span
+                                class="block text-[10px] text-muted-foreground"
+                                >Severity:</span
+                            >
+                            <strong>{{
+                                activeModalEvent.severity ||
+                                activeModalEvent.severity_text
+                            }}</strong>
                         </div>
                         <div v-if="activeModalEvent.depth_km !== null">
                             <span
@@ -217,15 +266,23 @@ function handleSelectEvent(event: DisasterEvent) {
                     >
                         Close
                     </Button>
-                    <a
-                        :href="activeModalEvent.source_url"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        class="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:bg-primary/90"
-                    >
-                        <span>Official Bulletin</span>
-                        <ExternalLink class="size-3" />
-                    </a>
+                    <div class="flex items-center gap-2">
+                        <Link
+                            :href="'/events/' + activeModalEvent.id"
+                            class="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-3 py-1.5 text-xs font-semibold text-foreground hover:bg-muted"
+                        >
+                            <span>Dedicated Page &rarr;</span>
+                        </Link>
+                        <a
+                            :href="activeModalEvent.source_url"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            class="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:bg-primary/90"
+                        >
+                            <span>Official Bulletin</span>
+                            <ExternalLink class="size-3" />
+                        </a>
+                    </div>
                 </div>
             </DialogContent>
         </Dialog>

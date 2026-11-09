@@ -1,22 +1,32 @@
 <script setup lang="ts">
 import {
+    AlertTriangle,
+    Clock,
     Cloud,
     CloudDrizzle,
     CloudFog,
     CloudLightning,
     CloudRain,
-    Compass,
     Droplets,
     Info,
+    RefreshCw,
     Sun,
-    Thermometer,
     Wind,
 } from '@lucide/vue';
+import { onMounted, ref } from 'vue';
+import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
-import type { WeatherCity } from '@/types/disaster';
+import type { SourceFreshness, WeatherCity } from '@/types/disaster';
+
+const isMounted = ref(false);
+onMounted(() => {
+    isMounted.value = true;
+});
 
 defineProps<{
     weather: WeatherCity[];
+    sourceMeta?: SourceFreshness | null;
+    isLoading?: boolean;
 }>();
 
 function getWeatherIcon(iconName: string) {
@@ -38,6 +48,21 @@ function getWeatherIcon(iconName: string) {
             return Cloud;
     }
 }
+
+function formatTime(isoString: string | null | undefined): string {
+    if (!isoString) return 'N/A';
+    if (!isMounted.value) return isoString.replace('T', ' ').slice(0, 16);
+    try {
+        return new Date(isoString).toLocaleString([], {
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+        });
+    } catch {
+        return isoString;
+    }
+}
 </script>
 
 <template>
@@ -51,13 +76,38 @@ function getWeatherIcon(iconName: string) {
                 class="mb-5 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between"
             >
                 <div>
-                    <div class="flex items-center gap-2">
+                    <div class="flex flex-wrap items-center gap-2">
                         <span class="size-2 rounded-full bg-cyan-500"></span>
                         <h3
                             class="text-xs font-semibold tracking-wider text-muted-foreground uppercase"
                         >
                             Atmospheric & Meteorological Conditions
                         </h3>
+                        <Badge
+                            v-if="sourceMeta?.is_fresh"
+                            variant="outline"
+                            class="border-emerald-500/30 bg-emerald-500/10 text-[10px] font-semibold text-emerald-700 dark:text-emerald-400"
+                        >
+                            Fresh ({{
+                                formatTime(sourceMeta.last_successful_fetch)
+                            }})
+                        </Badge>
+                        <Badge
+                            v-else-if="sourceMeta?.is_stale"
+                            variant="outline"
+                            class="border-amber-500/30 bg-amber-500/10 text-[10px] font-semibold text-amber-700 dark:text-amber-400"
+                        >
+                            Stale Cache ({{
+                                formatTime(sourceMeta.last_successful_fetch)
+                            }})
+                        </Badge>
+                        <Badge
+                            v-else-if="sourceMeta?.status === 'Unavailable'"
+                            variant="destructive"
+                            class="text-[10px] font-semibold"
+                        >
+                            Unavailable
+                        </Badge>
                     </div>
                     <h2
                         class="text-xl font-bold tracking-tight text-foreground sm:text-2xl"
@@ -83,9 +133,53 @@ function getWeatherIcon(iconName: string) {
                 </div>
             </div>
 
+            <!-- Stale Weather Warning Banner -->
+            <div
+                v-if="
+                    sourceMeta &&
+                    (sourceMeta.is_stale || sourceMeta.status === 'Stale')
+                "
+                class="mb-4 flex items-start gap-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-800 dark:text-amber-300"
+            >
+                <AlertTriangle class="mt-0.5 size-4 shrink-0 text-amber-500" />
+                <div>
+                    <p class="font-semibold">
+                        Serving Cached Weather Observations (Stale Data)
+                    </p>
+                    <p class="mt-0.5">
+                        {{
+                            sourceMeta.error ||
+                            'Live Open-Meteo refresh failed.'
+                        }}
+                        Last successful update:
+                        <strong>{{
+                            formatTime(sourceMeta.last_successful_fetch)
+                        }}</strong
+                        >.
+                    </p>
+                </div>
+            </div>
+
+            <!-- Loading State -->
+            <div
+                v-if="isLoading && (!weather || weather.length === 0)"
+                class="rounded-xl border border-border bg-card/50 p-10 text-center"
+            >
+                <RefreshCw
+                    class="mx-auto mb-2 size-8 animate-spin text-muted-foreground"
+                />
+                <h3 class="text-sm font-semibold text-foreground">
+                    Loading atmospheric telemetry for 11 ASEAN capitals...
+                </h3>
+                <p class="mx-auto mt-1 max-w-md text-xs text-muted-foreground">
+                    Fetching real-time meteorological observations from
+                    Open-Meteo.
+                </p>
+            </div>
+
             <!-- Empty / Offline State -->
             <div
-                v-if="!weather || weather.length === 0"
+                v-else-if="!weather || weather.length === 0"
                 class="rounded-xl border border-dashed border-border bg-card/50 p-10 text-center"
             >
                 <Cloud class="mx-auto mb-2 size-8 text-muted-foreground" />
@@ -93,8 +187,12 @@ function getWeatherIcon(iconName: string) {
                     Weather telemetry temporarily unavailable
                 </h3>
                 <p class="mx-auto mt-1 max-w-md text-xs text-muted-foreground">
-                    Unable to retrieve current atmospheric observations from
-                    Open-Meteo. Use the Refresh button in the header to retry.
+                    {{
+                        sourceMeta?.error ||
+                        'Unable to retrieve current atmospheric observations from Open-Meteo.'
+                    }}
+                    No fake or placeholder weather statistics are shown when the
+                    upstream service is unreachable.
                 </p>
             </div>
 
@@ -140,7 +238,8 @@ function getWeatherIcon(iconName: string) {
                                     class="font-mono text-3xl font-extrabold tracking-tight text-foreground"
                                 >
                                     {{
-                                        item.temperature_c !== null
+                                        item.temperature_c !== null &&
+                                        item.temperature_c !== undefined
                                             ? item.temperature_c
                                             : '—'
                                     }}
@@ -188,7 +287,8 @@ function getWeatherIcon(iconName: string) {
                                     class="font-mono font-bold text-foreground"
                                 >
                                     {{
-                                        item.wind_speed_kmh !== null
+                                        item.wind_speed_kmh !== null &&
+                                        item.wind_speed_kmh !== undefined
                                             ? item.wind_speed_kmh
                                             : '—'
                                     }}
@@ -208,7 +308,8 @@ function getWeatherIcon(iconName: string) {
                                     class="font-mono font-bold text-foreground"
                                 >
                                     {{
-                                        item.humidity_pct !== null
+                                        item.humidity_pct !== null &&
+                                        item.humidity_pct !== undefined
                                             ? item.humidity_pct
                                             : '—'
                                     }}%
@@ -216,19 +317,37 @@ function getWeatherIcon(iconName: string) {
                             </div>
                         </div>
 
-                        <!-- Daily High / Low Forecast Range -->
+                        <!-- Daily High / Low Forecast Range & Observation Time -->
                         <div
-                            v-if="
-                                item.forecast_max_c !== null &&
-                                item.forecast_min_c !== null
-                            "
-                            class="flex items-center justify-between border-t border-border/40 pt-1 text-[10px] text-muted-foreground"
+                            class="space-y-1 border-t border-border/40 pt-1.5 text-[10px] text-muted-foreground"
                         >
-                            <span>Today's Forecast Range:</span>
-                            <span class="font-mono font-medium text-foreground">
-                                {{ item.forecast_min_c }}°C ~
-                                {{ item.forecast_max_c }}°C
-                            </span>
+                            <div
+                                v-if="
+                                    item.forecast_max_c !== null &&
+                                    item.forecast_min_c !== null
+                                "
+                                class="flex items-center justify-between"
+                            >
+                                <span>Today's Forecast Range:</span>
+                                <span
+                                    class="font-mono font-medium text-foreground"
+                                >
+                                    {{ item.forecast_min_c }}°C ~
+                                    {{ item.forecast_max_c }}°C
+                                </span>
+                            </div>
+                            <div
+                                v-if="item.observation_time"
+                                class="flex items-center justify-between"
+                            >
+                                <span class="flex items-center gap-1">
+                                    <Clock class="size-2.5" />
+                                    Observation Time:
+                                </span>
+                                <span class="font-mono text-foreground/85">
+                                    {{ formatTime(item.observation_time) }}
+                                </span>
+                            </div>
                         </div>
                     </CardContent>
                 </Card>

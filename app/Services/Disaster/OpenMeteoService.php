@@ -12,7 +12,10 @@ class OpenMeteoService
 {
     private const CACHE_KEY = 'open_meteo_weather_sea';
     private const CACHE_META_KEY = 'open_meteo_meta_sea';
-    private const CACHE_TTL_SECONDS = 900; // 15 minutes
+    private const CACHE_FRESH_KEY = 'open_meteo_fresh_lock_sea';
+    private const DEFAULT_TTL_SECONDS = 900; // 15 minutes
+    private const STALE_BACKUP_TTL_SECONDS = 86400; // 24 hours backup for stale fallback
+    private const MIN_FORCE_REFRESH_INTERVAL = 15; // seconds
 
     public const CITIES = [
         [
@@ -137,51 +140,98 @@ class OpenMeteoService
      *
      * @return array{weather: array<int, array<string, mixed>>, meta: array<string, mixed>}
      */
-    public function getWeather(): array
+    public function getWeather(bool $forceRefresh = false): array
     {
+        $ttl = (int) config('services.disaster_apis.open_meteo.cache_ttl', self::DEFAULT_TTL_SECONDS);
+        $staleTtl = (int) config('services.disaster_apis.stale_ttl', self::STALE_BACKUP_TTL_SECONDS);
+        $timeout = (int) config('services.disaster_apis.timeout', 8);
+        $url = (string) config(
+            'services.disaster_apis.open_meteo.url',
+            'https://api.open-meteo.com/v1/forecast',
+        );
+
         $cached = Cache::get(self::CACHE_KEY);
         $cachedMeta = Cache::get(self::CACHE_META_KEY);
+        $isFreshLock = Cache::has(self::CACHE_FRESH_KEY);
 
-        if ($cached !== null && $cachedMeta !== null && ($cachedMeta['is_fresh'] ?? false)) {
-            return [
-                'weather' => $cached,
-                'meta' => $cachedMeta,
-            ];
+        if ($cached !== null && $cachedMeta !== null) {
+            if (!$forceRefresh && $isFreshLock) {
+                return [
+                    'weather' => $cached,
+                    'meta' => $this->refreshMetaTimestamps($cachedMeta, $ttl, true),
+                ];
+            }
+
+            if ($forceRefresh && !empty($cachedMeta['last_successful_fetch'])) {
+                try {
+                    $secondsSinceFetch = abs(Carbon::now()->diffInSeconds(Carbon::parse($cachedMeta['last_successful_fetch'])));
+                    if ($secondsSinceFetch < self::MIN_FORCE_REFRESH_INTERVAL && $isFreshLock) {
+                        return [
+                            'weather' => $cached,
+                            'meta' => $this->refreshMetaTimestamps($cachedMeta, $ttl, true),
+                        ];
+                    }
+                } catch (Throwable) {
+                    // Continue with live fetch
+                }
+            }
         }
+
+        $errorReason = 'Unable to contact Open-Meteo server.';
+        $connectionStatus = 'Connection Failed';
 
         try {
             $lats = implode(',', array_column(self::CITIES, 'lat'));
             $lngs = implode(',', array_column(self::CITIES, 'lng'));
 
-            $url = 'https://api.open-meteo.com/v1/forecast';
-            $response = Http::withoutVerifying()->timeout(6)->withHeaders([
-                'Accept' => 'application/json',
-                'User-Agent' => 'DisasterLinkSEA/1.0',
-            ])->get($url, [
-                'latitude' => $lats,
-                'longitude' => $lngs,
-                'current' => 'temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,weather_code,wind_speed_10m,wind_direction_10m',
-                'daily' => 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum',
-                'timezone' => 'auto',
-                'forecast_days' => 1,
-            ]);
+            $response = Http::withoutVerifying()
+                ->timeout($timeout)
+                ->connectTimeout(5)
+                ->withHeaders([
+                    'Accept' => 'application/json',
+                    'User-Agent' => 'DisasterLinkSEA/1.0',
+                ])
+                ->get($url, [
+                    'latitude' => $lats,
+                    'longitude' => $lngs,
+                    'current' => 'temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,weather_code,wind_speed_10m,wind_direction_10m',
+                    'daily' => 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum',
+                    'timezone' => 'auto',
+                    'forecast_days' => 1,
+                ]);
 
             if ($response->successful()) {
                 $data = $response->json();
-                // When multiple locations queried, Open-Meteo returns array of responses
+                if (!is_array($data)) {
+                    $connectionStatus = 'Invalid Response Format';
+                    throw new \RuntimeException('Invalid JSON structure from Open-Meteo API.');
+                }
+
+                // When multiple locations are queried, Open-Meteo returns an array of location objects
                 $items = isset($data[0]) ? $data : [$data];
                 $weatherList = [];
+                $latestObservationTime = null;
 
                 foreach (self::CITIES as $index => $cityMeta) {
                     $cityData = $items[$index] ?? null;
-                    if ($cityData === null) {
+                    if (!is_array($cityData) || !isset($cityData['current']) || !is_array($cityData['current'])) {
                         continue;
                     }
 
-                    $current = $cityData['current'] ?? [];
-                    $daily = $cityData['daily'] ?? [];
-                    $code = (int) ($current['weather_code'] ?? 0);
+                    $current = $cityData['current'];
+                    $daily = is_array($cityData['daily'] ?? null) ? $cityData['daily'] : [];
+                    $code = isset($current['weather_code']) && is_numeric($current['weather_code'])
+                        ? (int) $current['weather_code']
+                        : 0;
                     $wmo = self::WMO_CODES[$code] ?? ['condition' => 'Unknown', 'icon' => 'cloud'];
+
+                    $obsTime = isset($current['time']) && is_string($current['time'])
+                        ? $current['time']
+                        : null;
+
+                    if ($obsTime !== null && ($latestObservationTime === null || $obsTime > $latestObservationTime)) {
+                        $latestObservationTime = $obsTime;
+                    }
 
                     $weatherList[] = [
                         'country' => $cityMeta['country'],
@@ -190,38 +240,69 @@ class OpenMeteoService
                         'iso3' => $cityMeta['iso3'],
                         'latitude' => $cityMeta['lat'],
                         'longitude' => $cityMeta['lng'],
-                        'temperature_c' => isset($current['temperature_2m']) ? round((float) $current['temperature_2m'], 1) : null,
-                        'apparent_temperature_c' => isset($current['apparent_temperature']) ? round((float) $current['apparent_temperature'], 1) : null,
-                        'humidity_pct' => isset($current['relative_humidity_2m']) ? (int) $current['relative_humidity_2m'] : null,
-                        'precipitation_mm' => isset($current['precipitation']) ? round((float) $current['precipitation'], 1) : 0.0,
-                        'wind_speed_kmh' => isset($current['wind_speed_10m']) ? round((float) $current['wind_speed_10m'], 1) : null,
-                        'wind_direction_deg' => isset($current['wind_direction_10m']) ? (int) $current['wind_direction_10m'] : null,
+                        'temperature_c' => isset($current['temperature_2m']) && is_numeric($current['temperature_2m'])
+                            ? round((float) $current['temperature_2m'], 1)
+                            : null,
+                        'apparent_temperature_c' => isset($current['apparent_temperature']) && is_numeric($current['apparent_temperature'])
+                            ? round((float) $current['apparent_temperature'], 1)
+                            : null,
+                        'humidity_pct' => isset($current['relative_humidity_2m']) && is_numeric($current['relative_humidity_2m'])
+                            ? (int) $current['relative_humidity_2m']
+                            : null,
+                        'precipitation_mm' => isset($current['precipitation']) && is_numeric($current['precipitation'])
+                            ? round((float) $current['precipitation'], 1)
+                            : 0.0,
+                        'wind_speed_kmh' => isset($current['wind_speed_10m']) && is_numeric($current['wind_speed_10m'])
+                            ? round((float) $current['wind_speed_10m'], 1)
+                            : null,
+                        'wind_direction_deg' => isset($current['wind_direction_10m']) && is_numeric($current['wind_direction_10m'])
+                            ? (int) $current['wind_direction_10m']
+                            : null,
                         'weather_code' => $code,
                         'condition' => $wmo['condition'],
                         'icon' => $wmo['icon'],
                         'is_day' => (bool) ($current['is_day'] ?? true),
-                        'forecast_max_c' => isset($daily['temperature_2m_max'][0]) ? round((float) $daily['temperature_2m_max'][0], 1) : null,
-                        'forecast_min_c' => isset($daily['temperature_2m_min'][0]) ? round((float) $daily['temperature_2m_min'][0], 1) : null,
-                        'forecast_precipitation_sum_mm' => isset($daily['precipitation_sum'][0]) ? round((float) $daily['precipitation_sum'][0], 1) : null,
-                        'observation_time' => $current['time'] ?? Carbon::now()->toIso8601String(),
-                        'data_type' => 'High-resolution atmospheric model simulation (Open-Meteo)',
+                        'forecast_max_c' => isset($daily['temperature_2m_max'][0]) && is_numeric($daily['temperature_2m_max'][0])
+                            ? round((float) $daily['temperature_2m_max'][0], 1)
+                            : null,
+                        'forecast_min_c' => isset($daily['temperature_2m_min'][0]) && is_numeric($daily['temperature_2m_min'][0])
+                            ? round((float) $daily['temperature_2m_min'][0], 1)
+                            : null,
+                        'forecast_precipitation_sum_mm' => isset($daily['precipitation_sum'][0]) && is_numeric($daily['precipitation_sum'][0])
+                            ? round((float) $daily['precipitation_sum'][0], 1)
+                            : null,
+                        'observation_time' => $obsTime ?? '',
+                        'data_type' => 'High-resolution atmospheric model telemetry (Open-Meteo)',
                     ];
                 }
 
+                if (empty($weatherList)) {
+                    $connectionStatus = 'Empty Weather Payload';
+                    throw new \RuntimeException('Open-Meteo returned 0 valid city observations.');
+                }
+
+                $nowIso = Carbon::now()->toIso8601String();
                 $meta = [
                     'source' => 'Open-Meteo',
                     'name' => 'Open-Meteo Weather Forecast API',
                     'status' => 'Live',
-                    'last_successful_fetch' => Carbon::now()->toIso8601String(),
-                    'latest_event_time' => Carbon::now()->toIso8601String(),
+                    'freshness_status' => 'Fresh',
+                    'connection_status' => 'Connected (HTTP 200)',
+                    'last_successful_fetch' => $nowIso,
+                    'latest_event_time' => $latestObservationTime ?? $nowIso,
                     'cities_count' => count($weatherList),
+                    'cache_ttl_seconds' => $ttl,
+                    'provider_update_frequency' => 'Every 15–60 minutes (numerical weather model)',
+                    'frontend_poll_interval_seconds' => 60,
                     'is_fresh' => true,
                     'is_stale' => false,
+                    'error' => null,
                     'documentation_url' => 'https://open-meteo.com/en/docs',
                 ];
 
-                Cache::put(self::CACHE_KEY, $weatherList, self::CACHE_TTL_SECONDS);
-                Cache::put(self::CACHE_META_KEY, $meta, self::CACHE_TTL_SECONDS);
+                Cache::put(self::CACHE_FRESH_KEY, true, $ttl);
+                Cache::put(self::CACHE_KEY, $weatherList, $staleTtl);
+                Cache::put(self::CACHE_META_KEY, $meta, $staleTtl);
 
                 return [
                     'weather' => $weatherList,
@@ -229,19 +310,30 @@ class OpenMeteoService
                 ];
             }
 
-            Log::warning('Open-Meteo API returned non-200: ' . $response->status());
+            $status = $response->status();
+            $connectionStatus = $status === 429 ? 'Rate Limited (HTTP 429)' : "Upstream HTTP {$status}";
+            $errorReason = "Open-Meteo API returned HTTP {$status}.";
+            Log::warning("Open-Meteo API returned non-200: {$status}");
         } catch (Throwable $e) {
+            if ($connectionStatus === 'Connection Failed') {
+                $connectionStatus = 'Timeout / Network Error';
+            }
+            $errorReason = 'Open-Meteo fetch failed: ' . $e->getMessage();
             Log::error('Open-Meteo API fetch error: ' . $e->getMessage());
         }
 
-        if ($cached !== null && $cachedMeta !== null) {
-            $cachedMeta['status'] = 'Stale';
-            $cachedMeta['is_stale'] = true;
-            $cachedMeta['is_fresh'] = false;
-            $cachedMeta['error'] = 'Live refresh failed; serving cached data.';
+        if (is_array($cached) && is_array($cachedMeta)) {
+            $staleMeta = $this->refreshMetaTimestamps($cachedMeta, $ttl, false);
+            $staleMeta['status'] = 'Stale';
+            $staleMeta['freshness_status'] = 'Stale';
+            $staleMeta['connection_status'] = "Serving Stale Cache ({$connectionStatus})";
+            $staleMeta['is_stale'] = true;
+            $staleMeta['is_fresh'] = false;
+            $staleMeta['error'] = $errorReason . ' Serving last verified cached data.';
+
             return [
                 'weather' => $cached,
-                'meta' => $cachedMeta,
+                'meta' => $staleMeta,
             ];
         }
 
@@ -251,14 +343,36 @@ class OpenMeteoService
                 'source' => 'Open-Meteo',
                 'name' => 'Open-Meteo Weather Forecast API',
                 'status' => 'Unavailable',
+                'freshness_status' => 'Unavailable',
+                'connection_status' => $connectionStatus,
                 'last_successful_fetch' => null,
                 'latest_event_time' => null,
                 'cities_count' => 0,
+                'cache_ttl_seconds' => $ttl,
+                'provider_update_frequency' => 'Every 15–60 minutes (numerical weather model)',
+                'frontend_poll_interval_seconds' => 60,
                 'is_fresh' => false,
                 'is_stale' => false,
-                'error' => 'Unable to contact Open-Meteo server.',
+                'error' => $errorReason,
                 'documentation_url' => 'https://open-meteo.com/en/docs',
             ],
         ];
+    }
+
+    /**
+     * @param array<string, mixed> $meta
+     * @return array<string, mixed>
+     */
+    private function refreshMetaTimestamps(array $meta, int $ttl, bool $isFresh): array
+    {
+        $meta['cache_ttl_seconds'] = $ttl;
+        $meta['provider_update_frequency'] = 'Every 15–60 minutes (numerical weather model)';
+        $meta['frontend_poll_interval_seconds'] = 60;
+        $meta['is_fresh'] = $isFresh;
+        $meta['is_stale'] = !$isFresh;
+        $meta['freshness_status'] = $isFresh ? 'Fresh' : 'Stale';
+        $meta['status'] = $isFresh ? 'Live' : 'Stale';
+
+        return $meta;
     }
 }

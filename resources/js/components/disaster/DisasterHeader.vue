@@ -1,16 +1,23 @@
 <script setup lang="ts">
 import { Link, usePage } from '@inertiajs/vue3';
 import {
+    AlertCircle,
+    BellRing,
+    ClipboardList,
     Clock,
     CloudSun,
     Database,
     Globe,
     Home,
     LayoutDashboard,
+    LifeBuoy,
+    MapPin,
     Menu,
     Moon,
+    PlusCircle,
     RefreshCw,
     ShieldAlert,
+    ShieldCheck,
     Sun,
     X,
 } from '@lucide/vue';
@@ -24,6 +31,9 @@ defineProps<{
     countdown: number;
     isTabVisible: boolean;
     activeAlertsCount: number;
+    hasStaleSources?: boolean;
+    hasUnavailableSources?: boolean;
+    syncError?: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -53,6 +63,9 @@ function toggleDarkMode() {
 
 const navItems = [
     { name: 'Home', href: '/', icon: Home },
+    { name: 'Early Warning', href: '/intelligence', icon: BellRing },
+    { name: 'Relief & Shelters', href: '/coordination', icon: LifeBuoy },
+    { name: 'Countries', href: '/countries', icon: MapPin },
     { name: 'Disaster Map', href: '/map', icon: Globe },
     { name: 'Live Events', href: '/events', icon: ShieldAlert },
     { name: 'Weather', href: '/weather', icon: CloudSun },
@@ -136,7 +149,7 @@ function formatTime(isoString: string | null): string {
                 </div>
             </Link>
 
-            <!-- Desktop Navigation Links (Clean, Consistent Text-and-Icon Style) -->
+            <!-- Desktop Navigation Links -->
             <nav
                 aria-label="Main Navigation"
                 class="hidden items-center gap-1 lg:flex xl:gap-1.5"
@@ -162,6 +175,15 @@ function formatTime(isoString: string | null): string {
                         ]"
                     />
                     <span>{{ item.name }}</span>
+                    <span
+                        v-if="
+                            item.href === '/intelligence' &&
+                            activeAlertsCount > 0
+                        "
+                        class="py-0.2 ml-0.5 rounded-full bg-destructive/15 px-1.5 font-mono text-[10px] font-bold text-destructive"
+                    >
+                        {{ activeAlertsCount }}
+                    </span>
                 </Link>
             </nav>
 
@@ -170,20 +192,34 @@ function formatTime(isoString: string | null): string {
                 <!-- Live Sync Pill -->
                 <div
                     class="hidden items-center gap-2 rounded-md border border-border/70 bg-muted/40 px-2.5 py-1 text-[11px] text-muted-foreground md:flex"
+                    :title="
+                        !isTabVisible
+                            ? 'Polling paused while browser tab is hidden'
+                            : hasStaleSources
+                              ? 'One or more sources serving cached data'
+                              : 'Auto-refreshing every 60 seconds'
+                    "
                 >
                     <span class="flex size-2">
                         <span
                             :class="[
                                 'inline-flex size-2 rounded-full',
-                                isTabVisible
-                                    ? 'animate-pulse bg-emerald-500'
-                                    : 'bg-amber-400',
+                                !isTabVisible
+                                    ? 'bg-amber-400'
+                                    : syncError || hasUnavailableSources
+                                      ? 'bg-rose-500'
+                                      : hasStaleSources
+                                        ? 'bg-orange-500'
+                                        : 'animate-pulse bg-emerald-500',
                             ]"
                         ></span>
                     </span>
                     <span class="font-mono whitespace-nowrap">
                         <template v-if="!isTabVisible">Paused</template>
                         <template v-else-if="isRefreshing">Syncing...</template>
+                        <template v-else-if="hasStaleSources"
+                            >Stale • {{ countdown }}s</template
+                        >
                         <template v-else>{{ countdown }}s</template>
                     </span>
                     <span class="hidden text-border xl:inline">|</span>
@@ -212,6 +248,48 @@ function formatTime(isoString: string | null): string {
                     />
                     <span class="hidden sm:inline">Refresh</span>
                 </Button>
+
+                <!-- Report Disaster CTA Button -->
+                <Link
+                    href="/reports/create"
+                    class="flex h-8 items-center gap-1.5 rounded-md bg-destructive px-2.5 text-xs font-semibold text-destructive-foreground shadow-sm transition-colors hover:bg-destructive/90"
+                    title="Submit a citizen disaster observation report"
+                >
+                    <PlusCircle class="size-3.5" />
+                    <span class="hidden sm:inline">Report Disaster</span>
+                </Link>
+
+                <!-- My Reports (for authenticated users) -->
+                <Link
+                    v-if="$page.props.auth?.user"
+                    href="/my-reports"
+                    :class="[
+                        'hidden h-8 items-center gap-1.5 rounded-md border border-border/80 px-2.5 text-xs font-medium transition-colors md:inline-flex',
+                        isItemActive('/my-reports')
+                            ? 'border-destructive/30 bg-destructive/10 font-semibold text-foreground'
+                            : 'bg-card text-foreground hover:bg-muted',
+                    ]"
+                    title="View reports submitted by you"
+                >
+                    <ClipboardList class="size-3.5" />
+                    <span class="hidden xl:inline">My Reports</span>
+                </Link>
+
+                <!-- Admin Review Link (for administrators) -->
+                <Link
+                    v-if="$page.props.auth?.user?.role === 'admin'"
+                    href="/admin/reports"
+                    :class="[
+                        'hidden h-8 items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 text-xs font-semibold text-amber-600 transition-colors hover:bg-amber-500/20 md:inline-flex dark:text-amber-400',
+                        isItemActive('/admin/reports')
+                            ? 'ring-1 ring-amber-500'
+                            : '',
+                    ]"
+                    title="Admin Moderation Console"
+                >
+                    <ShieldCheck class="size-3.5" />
+                    <span>Admin Review</span>
+                </Link>
 
                 <!-- Dark Mode / Light Mode Toggle Button -->
                 <Button
@@ -270,8 +348,21 @@ function formatTime(isoString: string | null): string {
                     class="mb-2 flex items-center justify-between border-b border-border/60 pb-2 text-xs text-muted-foreground"
                 >
                     <span class="flex items-center gap-1.5 font-mono">
-                        <span class="size-2 rounded-full bg-emerald-500"></span>
-                        Auto-Sync: {{ countdown }}s
+                        <span
+                            :class="[
+                                'size-2 rounded-full',
+                                !isTabVisible
+                                    ? 'bg-amber-400'
+                                    : hasStaleSources
+                                      ? 'bg-orange-500'
+                                      : 'bg-emerald-500',
+                            ]"
+                        ></span>
+                        <template v-if="!isTabVisible"
+                            >Auto-Sync Paused</template
+                        >
+                        <template v-else-if="isRefreshing">Syncing...</template>
+                        <template v-else>Auto-Sync: {{ countdown }}s</template>
                     </span>
                     <span class="font-mono"
                         >Updated: {{ formatTime(lastUpdated) }}</span
@@ -300,6 +391,56 @@ function formatTime(isoString: string | null): string {
                         ]"
                     />
                     <span>{{ item.name }}</span>
+                    <span
+                        v-if="
+                            item.href === '/intelligence' &&
+                            activeAlertsCount > 0
+                        "
+                        class="py-0.2 ml-0.5 rounded-full bg-destructive/15 px-1.5 font-mono text-[10px] font-bold text-destructive"
+                    >
+                        {{ activeAlertsCount }}
+                    </span>
+                </Link>
+
+                <div class="my-1 border-t border-border/60"></div>
+
+                <Link
+                    href="/reports/create"
+                    class="flex items-center gap-2.5 rounded-lg bg-destructive px-3 py-2 text-sm font-semibold text-destructive-foreground shadow-sm"
+                    @click="mobileMenuOpen = false"
+                >
+                    <PlusCircle class="size-4 shrink-0" />
+                    <span>Report Disaster</span>
+                </Link>
+
+                <Link
+                    v-if="$page.props.auth?.user"
+                    href="/my-reports"
+                    :class="[
+                        'flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors',
+                        isItemActive('/my-reports')
+                            ? 'bg-destructive/10 font-semibold text-foreground'
+                            : 'font-medium text-muted-foreground hover:bg-muted hover:text-foreground',
+                    ]"
+                    @click="mobileMenuOpen = false"
+                >
+                    <ClipboardList class="size-4 shrink-0" />
+                    <span>My Reports</span>
+                </Link>
+
+                <Link
+                    v-if="$page.props.auth?.user?.role === 'admin'"
+                    href="/admin/reports"
+                    :class="[
+                        'flex items-center gap-2.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm font-semibold text-amber-600 transition-colors dark:text-amber-400',
+                        isItemActive('/admin/reports')
+                            ? 'ring-1 ring-amber-500'
+                            : '',
+                    ]"
+                    @click="mobileMenuOpen = false"
+                >
+                    <ShieldCheck class="size-4 shrink-0" />
+                    <span>Admin Review Panel</span>
                 </Link>
 
                 <!-- Mobile Theme Toggle Row -->
