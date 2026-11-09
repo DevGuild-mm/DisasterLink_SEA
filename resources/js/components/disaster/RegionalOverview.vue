@@ -1,12 +1,5 @@
 <script setup lang="ts">
-import {
-    Activity,
-    AlertOctagon,
-    AlertTriangle,
-    Flame,
-    Waves,
-    Wind,
-} from '@lucide/vue';
+import { Activity, AlertOctagon, Flame, Waves, Wind } from '@lucide/vue';
 import { computed } from 'vue';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
@@ -189,7 +182,7 @@ const cards = computed<CardConfig[]>(() => {
                     <p
                         class="text-xl font-bold tracking-tight text-foreground sm:text-2xl"
                     >
-                        Southeast Asia 24-Hour Overview
+                        Southeast Asia Live Telemetry Overview
                     </p>
                 </div>
                 <div class="text-xs text-muted-foreground">
@@ -250,6 +243,13 @@ const cards = computed<CardConfig[]>(() => {
                                 class="border-destructive/30 bg-destructive/10 px-1.5 py-0 text-[10px] text-destructive"
                             >
                                 Offline
+                            </Badge>
+                            <Badge
+                                v-else-if="card.status === 'Stale'"
+                                variant="outline"
+                                class="border-amber-500/30 bg-amber-500/10 px-1.5 py-0 text-[10px] text-amber-600 dark:text-amber-400"
+                            >
+                                Cached
                             </Badge>
                             <span
                                 v-else

@@ -1,6 +1,12 @@
 <script setup lang="ts">
 import { Head, Link, router } from '@inertiajs/vue3';
-import { AlertTriangle, Globe, RefreshCw, ShieldAlert } from '@lucide/vue';
+import {
+    AlertTriangle,
+    BellRing,
+    Globe,
+    RefreshCw,
+    ShieldAlert,
+} from '@lucide/vue';
 import { Button } from '@/components/ui/button';
 import DisasterFooter from '@/components/disaster/DisasterFooter.vue';
 import DisasterHeader from '@/components/disaster/DisasterHeader.vue';
@@ -18,6 +24,8 @@ const {
     syncError,
     countdown,
     isTabVisible,
+    hasStaleSources,
+    hasUnavailableSources,
     fetchDashboardData,
 } = useDisasterTelemetry(props.initialDashboardData);
 </script>
@@ -39,7 +47,10 @@ const {
             :countdown="countdown"
             :is-tab-visible="isTabVisible"
             :active-alerts-count="data.summary?.total_active_alerts?.count || 0"
-            @refresh="fetchDashboardData"
+            :has-stale-sources="hasStaleSources"
+            :has-unavailable-sources="hasUnavailableSources"
+            :sync-error="syncError"
+            @refresh="fetchDashboardData(true)"
         />
 
         <!-- Resilient API Error / Retry Banner -->
@@ -99,7 +110,14 @@ const {
                         </p>
                     </div>
 
-                    <div class="flex items-center gap-2">
+                    <div class="flex flex-wrap items-center gap-2">
+                        <Link
+                            href="/intelligence"
+                            class="inline-flex h-9 items-center gap-1.5 rounded-lg bg-destructive px-3.5 text-xs font-semibold text-destructive-foreground hover:bg-destructive/90"
+                        >
+                            <BellRing class="size-3.5" />
+                            <span>Early Warnings</span>
+                        </Link>
                         <Link
                             href="/map"
                             class="inline-flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3.5 text-xs font-semibold text-primary-foreground hover:bg-primary/90"

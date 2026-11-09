@@ -15,9 +15,12 @@ const props = defineProps<{
 const {
     data,
     isRefreshing,
+    isLoading,
     syncError,
     countdown,
     isTabVisible,
+    hasStaleSources,
+    hasUnavailableSources,
     fetchDashboardData,
 } = useDisasterTelemetry(props.initialDashboardData);
 </script>
@@ -39,7 +42,10 @@ const {
             :countdown="countdown"
             :is-tab-visible="isTabVisible"
             :active-alerts-count="data.summary?.total_active_alerts?.count || 0"
-            @refresh="fetchDashboardData"
+            :has-stale-sources="hasStaleSources"
+            :has-unavailable-sources="hasUnavailableSources"
+            :sync-error="syncError"
+            @refresh="fetchDashboardData(true)"
         />
 
         <!-- Resilient API Error / Retry Banner -->
@@ -59,7 +65,7 @@ const {
                     size="sm"
                     class="h-7 cursor-pointer gap-1 border-amber-500/40 bg-transparent text-xs"
                     :disabled="isRefreshing"
-                    @click="fetchDashboardData"
+                    @click="fetchDashboardData(true)"
                 >
                     <RefreshCw
                         :class="['size-3', isRefreshing && 'animate-spin']"
@@ -72,7 +78,11 @@ const {
         <main class="flex-1 py-6 sm:py-10">
             <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
                 <!-- Weather Monitoring Component -->
-                <WeatherMonitoring :weather="data.weather" />
+                <WeatherMonitoring
+                    :weather="data.weather"
+                    :source-meta="data.sources.weather"
+                    :is-loading="isLoading"
+                />
             </div>
         </main>
 

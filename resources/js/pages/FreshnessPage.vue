@@ -18,6 +18,8 @@ const {
     syncError,
     countdown,
     isTabVisible,
+    hasStaleSources,
+    hasUnavailableSources,
     fetchDashboardData,
 } = useDisasterTelemetry(props.initialDashboardData);
 </script>
@@ -39,7 +41,10 @@ const {
             :countdown="countdown"
             :is-tab-visible="isTabVisible"
             :active-alerts-count="data.summary?.total_active_alerts?.count || 0"
-            @refresh="fetchDashboardData"
+            :has-stale-sources="hasStaleSources"
+            :has-unavailable-sources="hasUnavailableSources"
+            :sync-error="syncError"
+            @refresh="fetchDashboardData(true)"
         />
 
         <!-- Resilient API Error / Retry Banner -->
@@ -59,7 +64,7 @@ const {
                     size="sm"
                     class="h-7 cursor-pointer gap-1 border-amber-500/40 bg-transparent text-xs"
                     :disabled="isRefreshing"
-                    @click="fetchDashboardData"
+                    @click="fetchDashboardData(true)"
                 >
                     <RefreshCw
                         :class="['size-3', isRefreshing && 'animate-spin']"

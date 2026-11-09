@@ -4,10 +4,12 @@ import {
     Activity,
     AlertTriangle,
     ArrowRight,
+    BellRing,
     CloudSun,
     Database,
     ExternalLink,
     Globe,
+    LifeBuoy,
     RefreshCw,
     ShieldAlert,
 } from '@lucide/vue';
@@ -30,6 +32,9 @@ const {
     syncError,
     countdown,
     isTabVisible,
+    hasStaleSources,
+    hasUnavailableSources,
+    allEventSourcesUnavailable,
     fetchDashboardData,
 } = useDisasterTelemetry(props.initialDashboardData);
 
@@ -41,6 +46,22 @@ const keyFeatures = [
         icon: Activity,
         href: '/overview',
         color: 'text-rose-500 bg-rose-500/10 border-rose-500/20',
+    },
+    {
+        title: 'Early Warning & Risk Intelligence',
+        description:
+            'Multi-hazard risk assessment scoring, automated early warning alerts, longitudinal ASEAN analytics, and response triage.',
+        icon: BellRing,
+        href: '/intelligence',
+        color: 'text-purple-500 bg-purple-500/10 border-purple-500/20',
+    },
+    {
+        title: 'Emergency Coordination & Shelters',
+        description:
+            'Shelter availability tracking, relief supply inventories, verified hazard-aware evacuation transit, and volunteer rescue dispatch.',
+        icon: LifeBuoy,
+        href: '/coordination',
+        color: 'text-sky-500 bg-sky-500/10 border-sky-500/20',
     },
     {
         title: 'Interactive Regional Map',
@@ -120,7 +141,10 @@ const dataSources = [
             :countdown="countdown"
             :is-tab-visible="isTabVisible"
             :active-alerts-count="data.summary?.total_active_alerts?.count || 0"
-            @refresh="fetchDashboardData"
+            :has-stale-sources="hasStaleSources"
+            :has-unavailable-sources="hasUnavailableSources"
+            :sync-error="syncError"
+            @refresh="fetchDashboardData(true)"
         />
 
         <!-- Resilient API Error / Retry Banner -->
@@ -140,7 +164,7 @@ const dataSources = [
                     size="sm"
                     class="h-7 cursor-pointer gap-1 border-amber-500/40 bg-transparent text-xs"
                     :disabled="isRefreshing"
-                    @click="fetchDashboardData"
+                    @click="fetchDashboardData(true)"
                 >
                     <RefreshCw
                         :class="['size-3', isRefreshing && 'animate-spin']"
@@ -330,7 +354,12 @@ const dataSources = [
                                                 class="text-2xl font-extrabold text-foreground"
                                                 >{{
                                                     data.summary?.earthquakes
-                                                        ?.count ?? 0
+                                                        ?.status ===
+                                                    'Unavailable'
+                                                        ? 'N/A'
+                                                        : (data.summary
+                                                              ?.earthquakes
+                                                              ?.count ?? 0)
                                                 }}</span
                                             >
                                         </div>
@@ -344,11 +373,19 @@ const dataSources = [
                                             <span
                                                 class="text-2xl font-extrabold text-foreground"
                                                 >{{
-                                                    (data.summary?.floods
-                                                        ?.count ?? 0) +
-                                                    (data.summary
+                                                    data.summary?.floods
+                                                        ?.status ===
+                                                        'Unavailable' &&
+                                                    data.summary
                                                         ?.tropical_cyclones
-                                                        ?.count ?? 0)
+                                                        ?.status ===
+                                                        'Unavailable'
+                                                        ? 'N/A'
+                                                        : (data.summary?.floods
+                                                              ?.count ?? 0) +
+                                                          (data.summary
+                                                              ?.tropical_cyclones
+                                                              ?.count ?? 0)
                                                 }}</span
                                             >
                                         </div>
@@ -363,7 +400,12 @@ const dataSources = [
                                                 class="text-2xl font-extrabold text-foreground"
                                                 >{{
                                                     data.summary?.wildfires
-                                                        ?.count ?? 0
+                                                        ?.status ===
+                                                    'Unavailable'
+                                                        ? 'N/A'
+                                                        : (data.summary
+                                                              ?.wildfires
+                                                              ?.count ?? 0)
                                                 }}</span
                                             >
                                         </div>
@@ -376,7 +418,11 @@ const dataSources = [
                                             >
                                             <span
                                                 class="text-2xl font-extrabold text-destructive"
-                                                >{{ data.events.length }}</span
+                                                >{{
+                                                    allEventSourcesUnavailable
+                                                        ? 'N/A'
+                                                        : data.events.length
+                                                }}</span
                                             >
                                         </div>
                                     </div>
