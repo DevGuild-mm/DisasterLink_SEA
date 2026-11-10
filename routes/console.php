@@ -12,3 +12,6 @@ Artisan::command('inspire', function () {
 // The 10-minute overlap expiry outlives the 300 s service lock; the service lock is the real guard.
 Schedule::command('disaster:sync gdacs')->cron('2,17,32,47 * * * *')->withoutOverlapping(10);
 Schedule::command('disaster:sync usgs')->cron('4-59/5 * * * *')->withoutOverlapping(10);
+
+// Alert recovery (HLD v1.3 §27.5): queue missed alert work and fail stuck sends.
+Schedule::command('alerts:dispatch')->everyFiveMinutes()->withoutOverlapping(10);

@@ -94,6 +94,18 @@ final class Geometry
     }
 
     /**
+     * Great-circle distance in km between two WGS84 points.
+     */
+    public static function haversineKm(float $lat1, float $lng1, float $lat2, float $lng2): float
+    {
+        $dLat = deg2rad($lat2 - $lat1);
+        $dLng = deg2rad($lng2 - $lng1);
+        $a = sin($dLat / 2) ** 2 + cos(deg2rad($lat1)) * cos(deg2rad($lat2)) * sin($dLng / 2) ** 2;
+
+        return 6371.0 * 2 * asin(min(1.0, sqrt($a)));
+    }
+
+    /**
      * Distance in km from a point to a lat/lng bounding box (0 when inside).
      */
     public static function distanceToBoxKm(float $lng, float $lat, float $minLng, float $maxLng, float $minLat, float $maxLat): float

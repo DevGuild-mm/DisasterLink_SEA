@@ -2,9 +2,11 @@
 
 namespace App\Services\Disaster\Sync;
 
+use App\Jobs\ProcessEventAlerts;
 use App\Models\DataSource;
 use App\Models\DisasterEvent;
 use App\Models\SyncRun;
+use App\Services\Disaster\Alerts\AlertEligibility;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -32,8 +34,13 @@ class DisasterSyncService
      */
     private array $clients;
 
-    public function __construct(GdacsClient $gdacs, UsgsClient $usgs, private CountryResolver $countryResolver)
-    {
+    public function __construct(
+        GdacsClient $gdacs,
+        UsgsClient $usgs,
+        private CountryResolver $countryResolver,
+        private EarthquakeLinker $linker,
+        private AlertEligibility $eligibility,
+    ) {
         $this->clients = [
             $gdacs->key() => $gdacs,
             $usgs->key() => $usgs,
@@ -124,19 +131,37 @@ class DisasterSyncService
         ]);
 
         $this->invalidateCaches($counts);
+        $this->dispatchAlerts($counts['alerts']);
 
         return $run;
+    }
+
+    /**
+     * Queue the alert jobs for events that just became eligible. Runs after the commit. A queue problem must not
+     * fail the sync; `alerts:dispatch` picks up any event left pending.
+     *
+     * @param  array<int, int>  $eventIds
+     */
+    private function dispatchAlerts(array $eventIds): void
+    {
+        foreach ($eventIds as $eventId) {
+            try {
+                ProcessEventAlerts::dispatch($eventId);
+            } catch (Throwable $e) {
+                Log::warning("Could not queue alerts for event {$eventId}: {$e->getMessage()}");
+            }
+        }
     }
 
     /**
      * Called only after a successful commit. Nothing changes for the UI when no event was created or
      * meaningfully updated, so the cached payload (and its country entries) stay.
      *
-     * @param  array{created: int, updated: int, countries: array<int, int>}  $counts
+     * @param  array{created: int, updated: int, countries: array<int, int>, links: int, alerts: array<int, int>}  $counts
      */
     private function invalidateCaches(array $counts): void
     {
-        if ($counts['created'] + $counts['updated'] === 0) {
+        if ($counts['created'] + $counts['updated'] + $counts['links'] === 0) {
             return;
         }
 
@@ -150,8 +175,8 @@ class DisasterSyncService
     /**
      * Upsert by (source, external_id). Existing rows keep first_seen_at, country and alert fields.
      *
-     * @return array{created: int, updated: int, countries: array<int, int>} `countries` are the ids of
-     *                                                                       every country whose events changed (old and new)
+     * @return array{created: int, updated: int, countries: array<int, int>, links: int, alerts: array<int, int>} `countries` are the ids of
+     *                                                                                                            every country whose events changed (old and new)
      */
     private function persist(string $source, FetchResult $result): array
     {
@@ -163,12 +188,12 @@ class DisasterSyncService
         }
 
         if ($rows === []) {
-            return ['created' => 0, 'updated' => 0, 'countries' => []];
+            return ['created' => 0, 'updated' => 0, 'countries' => [], 'links' => 0, 'alerts' => []];
         }
 
         $this->countryResolver->flush();
 
-        return DB::transaction(function () use ($source, $rows): array {
+        return DB::transaction(function () use ($source, $rows, $now): array {
             $before = [];
 
             foreach (array_chunk(array_keys($rows), self::CHUNK_SIZE) as $ids) {
@@ -210,7 +235,17 @@ class DisasterSyncService
                 }
             }
 
-            return ['created' => $created, 'updated' => $updated, 'countries' => array_values($affected)];
+            $linked = $this->linker->link(
+                DisasterEvent::query()->where('source', $source)->whereIn('external_id', array_keys($rows))->pluck('id')->all(),
+            );
+
+            return [
+                'created' => $created,
+                'updated' => $updated,
+                'countries' => array_values($affected),
+                'links' => $linked['changes'],
+                'alerts' => $this->eligibility->evaluate($linked['canonical'], $now),
+            ];
         });
     }
 

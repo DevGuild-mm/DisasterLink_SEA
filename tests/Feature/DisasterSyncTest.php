@@ -1,10 +1,13 @@
 <?php
 
+use App\Jobs\ProcessEventAlerts;
 use App\Models\Country;
 use App\Models\CountryBoundary;
 use App\Models\DataSource;
+use App\Models\DisasterAlertLog;
 use App\Models\DisasterEvent;
 use App\Models\SyncRun;
+use App\Models\User;
 use App\Services\Disaster\Sync\DisasterSyncService;
 use App\Services\Disaster\Sync\SafeUrl;
 use App\Services\Disaster\Sync\SourceFetchException;
@@ -1097,4 +1100,117 @@ test('the deadline is cleared after a run so a later direct fetch is not bounded
     $this->travel(10)->minutes();
 
     expect(fn () => app(UsgsClient::class)->fetch())->not->toThrow(SourceFetchException::class);
+});
+
+/*
+ * Phase 4: a sync marks eligible events and queues the alerts (HLD §13.4).
+ */
+
+test('a new Orange event in a user country sends exactly one email, even across repeated syncs', function () {
+    Mail::fake();
+    config(['alerts.dry_run' => false]);
+    $phl = Country::factory()->create(['iso2' => 'PH', 'iso3' => 'PHL', 'name' => 'Philippines']);
+    $user = User::factory()->create(['country_id' => $phl->id]);
+    User::factory()->create(['country_id' => Country::factory()->create()->id]);
+
+    $feature = gdacsFeature(['properties' => ['fromdate' => now()->subHours(2)->format('Y-m-d\TH:i:s')]]);
+
+    syncGdacsWith($feature);
+    syncGdacsWith($feature);
+    $this->travel(20)->minutes();
+    syncGdacsWith($feature);
+
+    $event = DisasterEvent::first();
+
+    expect($event->alert_status)->toBe('completed')
+        ->and(DisasterAlertLog::count())->toBe(1)
+        ->and(DisasterAlertLog::first()->user_id)->toBe($user->id)
+        ->and(DisasterAlertLog::first()->status)->toBe('sent');
+    Mail::assertSentCount(1);
+});
+
+test('an event first seen long ago and already Red sends nothing', function () {
+    Mail::fake();
+    config(['alerts.dry_run' => false]);
+    $phl = Country::factory()->create(['iso3' => 'PHL']);
+    User::factory()->create(['country_id' => $phl->id]);
+
+    syncGdacsWith(gdacsFeature(['properties' => [
+        'alertlevel' => 'Red', 'fromdate' => now()->subDays(4)->format('Y-m-d\TH:i:s'),
+    ]]));
+
+    expect(DisasterEvent::first()->alert_status)->toBe('not_eligible')
+        ->and(DisasterAlertLog::count())->toBe(0);
+    Mail::assertNothingSent();
+});
+
+test('a Green event that is raised to Orange later alerts once', function () {
+    Mail::fake();
+    config(['alerts.dry_run' => false]);
+    $phl = Country::factory()->create(['iso3' => 'PHL']);
+    User::factory()->create(['country_id' => $phl->id]);
+    $started = now()->subDays(2)->format('Y-m-d\TH:i:s');
+
+    syncGdacsWith(gdacsFeature(['properties' => ['alertlevel' => 'Green', 'fromdate' => $started]]));
+    expect(DisasterEvent::first()->alert_status)->toBe('not_eligible');
+
+    $this->travel(15)->minutes();
+    syncGdacsWith(gdacsFeature(['properties' => ['alertlevel' => 'Orange', 'fromdate' => $started]]));
+    $this->travel(15)->minutes();
+    syncGdacsWith(gdacsFeature(['properties' => ['alertlevel' => 'Red', 'fromdate' => $started]]));
+
+    expect(DisasterEvent::first()->alert_status)->toBe('completed');
+    Mail::assertSentCount(1);
+});
+
+test('the same earthquake from USGS and GDACS alerts a user only once, using the GDACS country', function () {
+    Mail::fake();
+    config(['alerts.dry_run' => false]);
+    $idn = Country::factory()->create(['iso2' => 'ID', 'iso3' => 'IDN', 'name' => 'Indonesia']);
+    User::factory()->create(['country_id' => $idn->id]);
+    $time = now()->subMinutes(30);
+
+    // USGS first: offshore, so its own country stays unresolved and nothing is sent yet.
+    resetHttp();
+    Http::fake([USGS_URL => Http::response(usgsResponse([usgsFeature('us6000x', ['mag' => 6.0, 'time' => $time->getTimestampMs()], [100.1, -1.2, 20.0])]))]);
+    app(DisasterSyncService::class)->sync('usgs');
+
+    expect(DisasterEvent::first()->country_status)->toBe('unresolved');
+    Mail::assertNothingSent();
+
+    $this->travel(15)->minutes();
+    syncGdacsWith(gdacsFeature(['properties' => [
+        'eventtype' => 'EQ', 'eventid' => 555, 'iso3' => 'IDN', 'country' => 'Indonesia',
+        'fromdate' => $time->copy()->addMinute()->format('Y-m-d\TH:i:s'),
+        'affectedcountries' => [['iso2' => 'ID', 'iso3' => 'IDN', 'countryname' => 'Indonesia']],
+        'severitydata' => ['severity' => 6.1, 'severitytext' => 'Magnitude 6.1M, Depth:10km', 'severityunit' => 'M'],
+    ], 'geometry' => ['type' => 'Point', 'coordinates' => [100.15, -1.25]]]));
+
+    $usgs = DisasterEvent::where('source', 'usgs')->first();
+    $gdacs = DisasterEvent::where('source', 'gdacs')->first();
+
+    expect($gdacs->canonical_event_id)->toBe($usgs->id)
+        ->and($usgs->country_id)->toBe($idn->id)
+        ->and($usgs->country_method)->toBe('linked_source')
+        ->and($usgs->alert_status)->toBe('completed')
+        ->and($gdacs->alert_status)->toBe('not_eligible')
+        ->and(DisasterAlertLog::count())->toBe(1);
+    Mail::assertSentCount(1);
+});
+
+test('a failed sync sends no alert and a queue problem does not fail the sync', function () {
+    Mail::fake();
+    Bus::fake();
+    $phl = Country::factory()->create(['iso3' => 'PHL']);
+    User::factory()->create(['country_id' => $phl->id]);
+
+    resetHttp();
+    Http::fake([GDACS_URL => Http::response('boom', 500)]);
+    expect(app(DisasterSyncService::class)->sync('gdacs')->status)->toBe('failed');
+
+    syncGdacsWith(gdacsFeature(['properties' => ['fromdate' => now()->subHour()->format('Y-m-d\TH:i:s')]]));
+
+    expect(DisasterEvent::first()->alert_status)->toBe('pending');
+    Bus::assertDispatched(ProcessEventAlerts::class);
+    Mail::assertNothingSent();
 });
