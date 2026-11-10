@@ -8,6 +8,7 @@ Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
 })->purpose('Display an inspiring quote');
 
-// Disaster data sync (HLD v1.3 §10.3). Times are staggered so two sources never fetch in the same minute.
-Schedule::command('disaster:sync gdacs')->cron('2,17,32,47 * * * *')->withoutOverlapping();
-Schedule::command('disaster:sync usgs')->cron('4-59/5 * * * *')->withoutOverlapping();
+// Disaster data sync (HLD v1.3 §10.3, v1.4 §28.9). Times are staggered so two sources never fetch in the same minute.
+// The 10-minute overlap expiry outlives the 300 s service lock; the service lock is the real guard.
+Schedule::command('disaster:sync gdacs')->cron('2,17,32,47 * * * *')->withoutOverlapping(10);
+Schedule::command('disaster:sync usgs')->cron('4-59/5 * * * *')->withoutOverlapping(10);

@@ -7,12 +7,16 @@ use App\Models\DisasterEvent;
 use App\Models\SyncRun;
 use App\Services\Disaster\Sync\DisasterSyncService;
 use App\Services\Disaster\Sync\SafeUrl;
+use App\Services\Disaster\Sync\SourceFetchException;
+use App\Services\Disaster\Sync\UsgsClient;
 use Carbon\CarbonInterval;
 use Database\Seeders\DataSourceSeeder;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Sleep;
@@ -213,7 +217,7 @@ test('running a sync twice creates no duplicates and keeps first_seen_at', funct
 
     expect(DisasterEvent::count())->toBe(1)
         ->and($run->created_count)->toBe(0)
-        ->and($run->updated_count)->toBe(1)
+        ->and($run->updated_count)->toBe(0)
         ->and($event->first_seen_at->equalTo($firstSeen))->toBeTrue()
         ->and($event->last_seen_at->isAfter($firstSeen))->toBeTrue();
 });
@@ -427,9 +431,9 @@ test('a success resets failures and records counts', function () {
         ->and(SyncRun::where('source_key', 'usgs')->count())->toBe(1);
 });
 
-test('a successful sync clears the dashboard cache', function () {
+test('a successful sync that created an event clears the dashboard cache', function () {
     Cache::put('dashboard:current:v1', ['stale' => true], 300);
-    Http::fake([GDACS_URL => Http::response(gdacsResponse([]))]);
+    Http::fake([GDACS_URL => Http::response(gdacsResponse([gdacsFeature()]))]);
 
     app(DisasterSyncService::class)->sync('gdacs');
 
@@ -751,4 +755,346 @@ test('a resolved country is kept on later syncs, an unresolved one is retried wh
     DisasterEvent::query()->update(['country_note' => 'kept']);
     app(DisasterSyncService::class)->sync('usgs');
     expect(DisasterEvent::first()->country_note)->toBe('kept');
+});
+
+/*
+ * Follow-up 1: meaningful change detection and conditional cache invalidation (HLD v1.4 §28.6).
+ */
+
+/**
+ * Http::fake() keeps the first matching stub, so a test that changes the response between syncs starts afresh.
+ */
+function resetHttp(): void
+{
+    Http::swap(new Factory);
+    Http::preventStrayRequests();
+}
+
+function syncGdacsWith(array $feature): SyncRun
+{
+    resetHttp();
+    Http::fake([GDACS_URL => Http::response(gdacsResponse([$feature]))]);
+
+    return app(DisasterSyncService::class)->sync('gdacs');
+}
+
+test('a resync with nothing meaningful changed counts no update and keeps the cache', function () {
+    syncGdacsWith(gdacsFeature());
+    $before = DisasterEvent::first();
+
+    $this->travel(10)->minutes();
+    Cache::put('dashboard:current:v1', ['cached' => true], 300);
+    // Only values that are not meaningful differ: raw_payload (an extra unmapped property) and the seen timestamps.
+    $run = syncGdacsWith(gdacsFeature(['properties' => ['unmapped_noise' => 'changes every poll']]));
+    $after = DisasterEvent::first();
+
+    expect($run->status)->toBe('success')
+        ->and($run->created_count)->toBe(0)
+        ->and($run->updated_count)->toBe(0)
+        ->and($run->processed_count)->toBe(0)
+        ->and(Cache::get('dashboard:current:v1'))->toBe(['cached' => true])
+        ->and($after->last_seen_at->isAfter($before->last_seen_at))->toBeTrue()
+        ->and($after->raw_payload)->not->toEqual($before->raw_payload);
+});
+
+test('an empty successful sync keeps the cache', function () {
+    Cache::put('dashboard:current:v1', ['cached' => true], 300);
+    resetHttp();
+    Http::fake([GDACS_URL => Http::response(gdacsResponse([]))]);
+
+    app(DisasterSyncService::class)->sync('gdacs');
+
+    expect(Cache::get('dashboard:current:v1'))->toBe(['cached' => true]);
+});
+
+test('a meaningful change counts one update and clears the cache', function (array $change) {
+    syncGdacsWith(gdacsFeature());
+    Cache::put('dashboard:current:v1', ['cached' => true], 300);
+
+    $run = syncGdacsWith(gdacsFeature($change));
+
+    expect($run->created_count)->toBe(0)
+        ->and($run->updated_count)->toBe(1)
+        ->and($run->processed_count)->toBe(1)
+        ->and(Cache::has('dashboard:current:v1'))->toBeFalse();
+})->with([
+    'alert level' => [['properties' => ['alertlevel' => 'Red']]],
+    'title' => [['properties' => ['name' => 'Tropical Cyclone RENAMED']]],
+    'severity' => [['properties' => ['severitydata' => ['severity' => 190.0, 'severitytext' => 'Typhoon (190 km/h)']]]],
+    'coordinates' => [['geometry' => ['type' => 'Point', 'coordinates' => [126.0, 13.0]]]],
+    'end of event' => [['properties' => ['iscurrent' => 'false']]],
+    'source link' => [['properties' => ['url' => ['report' => 'https://www.gdacs.org/report.aspx?eventid=1&episodeid=99&eventtype=TC']]]],
+    'source update time' => [['properties' => ['datemodified' => '2026-11-09T09:00:00']]],
+    'country code in source_meta' => [['properties' => ['iso3' => 'VNM']]],
+    'affected countries in source_meta' => [['properties' => ['affectedcountries' => [['iso2' => 'PH', 'iso3' => 'PHL', 'countryname' => 'Philippines'], ['iso2' => 'VN', 'iso3' => 'VNM', 'countryname' => 'Viet Nam']]]]],
+]);
+
+test('a USGS status or magnitude revision is meaningful', function () {
+    resetHttp();
+    Http::fake([USGS_URL => Http::response(usgsResponse([usgsFeature('us1', ['status' => 'automatic', 'mag' => 5.6])]))]);
+    app(DisasterSyncService::class)->sync('usgs');
+
+    resetHttp();
+    Http::fake([USGS_URL => Http::response(usgsResponse([usgsFeature('us1', ['status' => 'reviewed', 'mag' => 5.6])]))]);
+    $statusRun = app(DisasterSyncService::class)->sync('usgs');
+
+    resetHttp();
+    Http::fake([USGS_URL => Http::response(usgsResponse([usgsFeature('us1', ['status' => 'reviewed', 'mag' => 5.9])]))]);
+    $magnitudeRun = app(DisasterSyncService::class)->sync('usgs');
+
+    resetHttp();
+    Http::fake([USGS_URL => Http::response(usgsResponse([usgsFeature('us1', ['status' => 'reviewed', 'mag' => 5.9])]))]);
+    $sameRun = app(DisasterSyncService::class)->sync('usgs');
+
+    expect([$statusRun->updated_count, $magnitudeRun->updated_count, $sameRun->updated_count])->toBe([1, 1, 0]);
+});
+
+test('new events and updates are counted separately in one run', function () {
+    syncGdacsWith(gdacsFeature());
+
+    resetHttp();
+    Http::fake([GDACS_URL => Http::response(gdacsResponse([
+        gdacsFeature(['properties' => ['alertlevel' => 'Red']]),
+        gdacsFeature(['properties' => ['eventid' => 2002, 'name' => 'Another']]),
+    ]))]);
+    $run = app(DisasterSyncService::class)->sync('gdacs');
+
+    expect($run->created_count)->toBe(1)->and($run->updated_count)->toBe(1)->and($run->processed_count)->toBe(2);
+});
+
+test('a country change counts as an update and clears the old and new country entries', function () {
+    $phl = Country::factory()->create(['iso3' => 'PHL']);
+    $vnm = Country::factory()->create(['iso3' => 'VNM']);
+    syncGdacsWith(gdacsFeature());
+    expect(DisasterEvent::first()->country_id)->toBe($phl->id);
+
+    Cache::put("country-alerts:{$phl->id}:v1", 'phl', 60);
+    Cache::put("country-alerts:{$vnm->id}:v1", 'vnm', 60);
+    Cache::put('country-alerts:999:v1', 'other', 60);
+
+    $run = syncGdacsWith(gdacsFeature(['properties' => ['iso3' => 'VNM']]));
+
+    expect($run->updated_count)->toBe(1)
+        ->and(DisasterEvent::first()->country_id)->toBe($vnm->id)
+        ->and(Cache::has("country-alerts:{$phl->id}:v1"))->toBeFalse()
+        ->and(Cache::has("country-alerts:{$vnm->id}:v1"))->toBeFalse()
+        ->and(Cache::get('country-alerts:999:v1'))->toBe('other');
+});
+
+test('a country entry is cleared only for countries whose events changed', function () {
+    $phl = Country::factory()->create(['iso3' => 'PHL']);
+    Cache::put("country-alerts:{$phl->id}:v1", 'phl', 60);
+
+    syncGdacsWith(gdacsFeature());
+
+    expect(Cache::has("country-alerts:{$phl->id}:v1"))->toBeFalse();
+
+    Cache::put("country-alerts:{$phl->id}:v1", 'phl', 60);
+    syncGdacsWith(gdacsFeature(['properties' => ['unmapped_noise' => 'x']]));
+
+    expect(Cache::get("country-alerts:{$phl->id}:v1"))->toBe('phl');
+});
+
+test('a failed sync keeps the cache and every stored event unchanged', function () {
+    syncGdacsWith(gdacsFeature());
+    $before = DisasterEvent::first()->toArray();
+    Cache::put('dashboard:current:v1', ['cached' => true], 300);
+
+    resetHttp();
+    Http::fake([GDACS_URL => Http::response('boom', 500)]);
+    $run = app(DisasterSyncService::class)->sync('gdacs');
+
+    expect($run->status)->toBe('failed')
+        ->and(Cache::get('dashboard:current:v1'))->toBe(['cached' => true])
+        ->and(DisasterEvent::first()->toArray())->toBe($before);
+});
+
+test('a database failure while saving rolls everything back and keeps the cache', function () {
+    syncGdacsWith(gdacsFeature());
+    Cache::put('dashboard:current:v1', ['cached' => true], 300);
+    $before = DisasterEvent::first()->toArray();
+
+    DB::listen(function ($query) {
+        if (str_contains($query->sql, 'update `disaster_events`') || str_contains($query->sql, 'update "disaster_events"')) {
+            throw new RuntimeException('simulated failure after the upsert');
+        }
+    });
+
+    resetHttp();
+    Http::fake([GDACS_URL => Http::response(gdacsResponse([gdacsFeature(['properties' => ['iso3' => 'VNM', 'name' => 'Changed']])]))]);
+    $run = app(DisasterSyncService::class)->sync('gdacs');
+
+    expect($run->status)->toBe('failed')
+        ->and($run->error_message)->toContain('simulated failure')
+        ->and(Cache::get('dashboard:current:v1'))->toBe(['cached' => true])
+        ->and(DisasterEvent::first()->toArray())->toBe($before);
+});
+
+/*
+ * Follow-up 2: scheduler overlap protection.
+ */
+
+test('the scheduled syncs expire their overlap mutex after 10 minutes, longer than the service lock', function () {
+    $events = collect(app(Schedule::class)->events())
+        ->filter(fn ($event) => str_contains($event->command, 'disaster:sync'));
+
+    expect($events)->toHaveCount(2);
+
+    foreach ($events as $event) {
+        expect($event->withoutOverlapping)->toBeTrue()
+            ->and($event->expiresAt)->toBe(10)
+            ->and($event->expiresAt * 60)->toBeGreaterThan(config('disaster_sources.sync.lock_seconds'));
+    }
+});
+
+test('the service lock still blocks a second run when the scheduler mutex is not held', function () {
+    $lock = Cache::lock('sync:gdacs', 300);
+    $lock->get();
+    resetHttp();
+    Http::fake();
+
+    expect(app(DisasterSyncService::class)->sync('gdacs'))->toBeNull();
+    Http::assertNothingSent();
+
+    $lock->release();
+});
+
+/*
+ * Follow-up 3: total sync time limit and compatible lock duration (HLD v1.4 §28.9).
+ */
+
+test('the timing values are consistent with the request and retry configuration', function () {
+    $sync = config('disaster_sources.sync');
+    $gdacs = config('disaster_sources.sources.gdacs');
+    $attempts = count($gdacs['retry_delays_ms']) + 1;
+
+    $worstRequest = $attempts * $gdacs['timeout'] + ($attempts - 1) * config('disaster_sources.max_retry_after_seconds');
+    $unboundedGdacs = (3 + $gdacs['max_green_pages']) * $worstRequest;
+    $maxRun = $sync['deadline_seconds'] + $gdacs['timeout'] + $sync['persist_allowance_seconds'];
+
+    expect($unboundedGdacs)->toBeGreaterThan($sync['lock_seconds'])          // why a deadline is needed
+        ->and($maxRun)->toBeLessThan($sync['job_timeout_seconds'])
+        ->and($sync['job_timeout_seconds'])->toBeLessThan($sync['lock_seconds'])
+        ->and($sync['lock_seconds'])->toBeLessThan(config('queue.connections.database.retry_after'))
+        ->and(config('queue.connections.database.retry_after'))->toBeGreaterThan($sync['job_timeout_seconds'])
+        ->and(config('disaster_sources.sources.usgs.timeout'))->toBeLessThanOrEqual($gdacs['timeout']);
+});
+
+test('the service lock uses the configured duration', function () {
+    config(['disaster_sources.sync.lock_seconds' => 123]);
+    resetHttp();
+    Http::fake([USGS_URL => function () {
+        $probe = Cache::lock('sync:usgs', 5);
+        expect($probe->get())->toBeFalse();   // held while fetching
+
+        return Http::response(usgsResponse([]));
+    }]);
+
+    $run = app(DisasterSyncService::class)->sync('usgs');
+
+    expect($run->status)->toBe('success')
+        ->and(Cache::lock('sync:usgs', 5)->get())->toBeTrue();    // released afterwards
+});
+
+test('retries stop when the next wait would pass the deadline and the run fails without changes', function () {
+    Sleep::fake(syncWithCarbon: true);
+    config(['disaster_sources.sync.deadline_seconds' => 3]);
+    syncGdacsWith(gdacsFeature());
+    $before = DisasterEvent::first()->toArray();
+    Cache::put('dashboard:current:v1', ['cached' => true], 300);
+
+    resetHttp();
+    Http::fake([GDACS_URL => Http::response('down', 503)]);
+    $run = app(DisasterSyncService::class)->sync('gdacs');
+
+    // attempt 1 fails, waits 2 s, attempt 2 fails; the next wait (5 s) would pass the 3 s deadline.
+    Http::assertSentCount(2);
+    Sleep::assertSleptTimes(1);
+
+    expect($run->status)->toBe('failed')
+        ->and($run->error_message)->toContain('total time limit of 3 s')
+        ->and(DataSource::find('gdacs')->consecutive_failures)->toBe(1)
+        ->and(DisasterEvent::first()->toArray())->toBe($before)
+        ->and(Cache::get('dashboard:current:v1'))->toBe(['cached' => true]);
+});
+
+test('no request starts once the deadline has passed', function () {
+    config(['disaster_sources.sync.deadline_seconds' => 0]);
+    resetHttp();
+    Http::fake();
+
+    $run = app(DisasterSyncService::class)->sync('usgs');
+
+    Http::assertNothingSent();
+    expect($run->status)->toBe('failed')->and($run->error_message)->toContain('total time limit');
+});
+
+test('a Retry-After wait that would pass the deadline is not taken', function () {
+    Sleep::fake(syncWithCarbon: true);
+    config(['disaster_sources.sync.deadline_seconds' => 10]);
+    resetHttp();
+    Http::fake([USGS_URL => Http::response('slow down', 429, ['Retry-After' => '20'])]);
+
+    $run = app(DisasterSyncService::class)->sync('usgs');
+
+    Sleep::assertNeverSlept();
+    Http::assertSentCount(1);
+    expect($run->status)->toBe('failed')->and($run->error_message)->toContain('total time limit');
+});
+
+test('a Green cut off by the deadline keeps the Orange/Red events and succeeds', function () {
+    Log::spy();
+    config(['disaster_sources.sync.deadline_seconds' => 100]);
+
+    resetHttp();
+    Http::fake([GDACS_URL => function (Request $request) {
+        parse_str((string) parse_url($request->url(), PHP_URL_QUERY), $query);
+
+        if ($query['alertlevel'] === 'green') {
+            return Http::response(gdacsResponse([]));
+        }
+
+        $this->travel(101)->seconds();   // the Orange/Red request used up the whole budget
+
+        return Http::response(gdacsResponse([gdacsFeature(['properties' => ['alertlevel' => 'Red']])]));
+    }]);
+
+    $run = app(DisasterSyncService::class)->sync('gdacs');
+
+    Http::assertSentCount(1);
+    expect($run->status)->toBe('success')
+        ->and(DisasterEvent::count())->toBe(1)
+        ->and(DisasterEvent::first()->alert_level)->toBe('Red');
+
+    Log::shouldHaveReceived('warning')->withArgs(fn (string $m) => str_contains($m, 'Green events could not be fetched') && str_contains($m, 'total time limit'))->once();
+});
+
+test('an unfinished Orange/Red level fails the run when the deadline passes', function () {
+    config(['disaster_sources.sync.deadline_seconds' => 100]);
+    $calls = 0;
+
+    resetHttp();
+    Http::fake([GDACS_URL => function () use (&$calls) {
+        $calls++;
+        $this->travel(101)->seconds();
+
+        return Http::response(gdacsResponse(gdacsFeatures(100, 1, 'Orange')));   // a full page: another page is needed
+    }]);
+
+    $run = app(DisasterSyncService::class)->sync('gdacs');
+
+    expect($run->status)->toBe('failed')
+        ->and($calls)->toBe(1)
+        ->and($run->error_message)->toContain('total time limit')
+        ->and(DisasterEvent::count())->toBe(0);
+});
+
+test('the deadline is cleared after a run so a later direct fetch is not bounded', function () {
+    resetHttp();
+    Http::fake([USGS_URL => Http::response(usgsResponse([]))]);
+    app(DisasterSyncService::class)->sync('usgs');
+
+    $this->travel(10)->minutes();
+
+    expect(fn () => app(UsgsClient::class)->fetch())->not->toThrow(SourceFetchException::class);
 });

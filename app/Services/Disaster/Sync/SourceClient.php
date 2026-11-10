@@ -16,7 +16,17 @@ use Throwable;
  */
 abstract class SourceClient
 {
+    private ?SyncDeadline $deadline = null;
+
     abstract public function key(): string;
+
+    /**
+     * Bound the total time of the next fetch, or pass null to remove the bound.
+     */
+    public function useDeadline(?SyncDeadline $deadline): void
+    {
+        $this->deadline = $deadline;
+    }
 
     /**
      * @throws SourceFetchException when the source is unreachable or returns an unusable response
@@ -30,6 +40,9 @@ abstract class SourceClient
      * (seconds or an HTTP date), unless it exceeds `max_retry_after_seconds`, in which case it is not retried.
      * Other waits use `retry_delays_ms`.
      *
+     * With a deadline set, no request starts after it, and a retry starts only if its wait leaves time
+     * before the deadline. Each attempt's timeout is capped by the time that remains.
+     *
      * @param  array<string, mixed>  $query
      *
      * @throws SourceFetchException
@@ -39,9 +52,14 @@ abstract class SourceClient
         /** @var array<int, int> $delays */
         $delays = array_values((array) $this->config('retry_delays_ms', []));
 
+        $this->guardDeadline();
+
+        $failures = 0;
+        $stoppedByDeadline = false;
+
         try {
-            $response = Http::timeout((int) $this->config('timeout', 15))
-                ->connectTimeout((int) $this->config('connect_timeout', 5))
+            $response = Http::timeout($this->capped((float) $this->config('timeout', 15)))
+                ->connectTimeout($this->capped((float) $this->config('connect_timeout', 5)))
                 ->withHeaders([
                     'Accept' => 'application/json',
                     'User-Agent' => (string) config('disaster_sources.user_agent'),
@@ -49,12 +67,34 @@ abstract class SourceClient
                 ->retry(
                     count($delays) + 1,
                     fn (int $attempt, mixed $e): int => $this->retryDelayMs($attempt, $e, $delays),
-                    when: fn (Throwable $e): bool => $this->shouldRetry($e),
+                    when: function (Throwable $e) use ($delays, &$failures, &$stoppedByDeadline): bool {
+                        $failures++;
+
+                        if (! $this->shouldRetry($e)) {
+                            return false;
+                        }
+
+                        if ($this->deadline !== null && $this->retryDelayMs($failures, $e, $delays) / 1000 >= $this->deadline->remaining()) {
+                            $stoppedByDeadline = true;
+
+                            return false;
+                        }
+
+                        return true;
+                    },
                     throw: false,
                 )
                 ->get((string) $this->config('url'), $query);
         } catch (ConnectionException $e) {
-            throw new SourceFetchException('Could not connect to '.$this->key().'.', null, $e);
+            throw new SourceFetchException(
+                $stoppedByDeadline ? $this->deadlineMessage() : 'Could not connect to '.$this->key().'.',
+                null,
+                $e,
+            );
+        }
+
+        if (! $response->successful() && $stoppedByDeadline) {
+            throw new SourceFetchException($this->deadlineMessage(), $response->status());
         }
 
         if (! $response->successful()) {
@@ -67,6 +107,26 @@ abstract class SourceClient
         }
 
         return $response;
+    }
+
+    private function guardDeadline(): void
+    {
+        if ($this->deadline?->expired()) {
+            throw new SourceFetchException($this->deadlineMessage());
+        }
+    }
+
+    private function deadlineMessage(): string
+    {
+        return $this->key().' sync stopped: the total time limit of '.$this->deadline?->seconds().' s was reached.';
+    }
+
+    /**
+     * An attempt timeout, never longer than the time left before the deadline (at least 1 s).
+     */
+    private function capped(float $seconds): float
+    {
+        return $this->deadline === null ? $seconds : max(1.0, min($seconds, $this->deadline->remaining()));
     }
 
     private function shouldRetry(Throwable $e): bool

@@ -16,7 +16,12 @@ use Throwable;
 /**
  * Runs one source sync (HLD §11.1): fetch, validate, upsert, record the run and source health.
  *
- * A failed run never changes stored events and never updates `last_success_at`.
+ * A failed run never changes stored events, never updates `last_success_at` and never touches the cache.
+ *
+ * Counts on a successful run: `created_count` is new events, `updated_count` is existing events whose
+ * meaningful fields (see EventChangeDetector) or resolved country changed, `processed_count` is their sum.
+ * Events seen again without a meaningful change are refreshed (`last_seen_at`) but not counted.
+ * Cached data is invalidated only after the transaction commits, and only when those counts are not zero.
  */
 class DisasterSyncService
 {
@@ -52,7 +57,7 @@ class DisasterSyncService
     {
         $client = $this->clients[$key] ?? throw new InvalidArgumentException("Unknown disaster source [{$key}].");
 
-        $lock = Cache::lock("sync:{$key}", 300);
+        $lock = Cache::lock("sync:{$key}", (int) config('disaster_sources.sync.lock_seconds', 300));
 
         if (! $lock->get()) {
             return null;
@@ -87,10 +92,13 @@ class DisasterSyncService
         $timer = hrtime(true);
 
         try {
+            $client->useDeadline(new SyncDeadline((int) config('disaster_sources.sync.deadline_seconds', 150)));
             $result = $client->fetch();
             $counts = $this->persist($key, $result);
         } catch (Throwable $e) {
             return $this->fail($source, $run, $e, $this->durationMs($timer));
+        } finally {
+            $client->useDeadline(null);
         }
 
         $run->update([
@@ -115,15 +123,35 @@ class DisasterSyncService
             'last_empty_success_at' => $result->fetchedCount === 0 ? Carbon::now() : $source->last_empty_success_at,
         ]);
 
-        Cache::forget('dashboard:current:v1');
+        $this->invalidateCaches($counts);
 
         return $run;
     }
 
     /**
+     * Called only after a successful commit. Nothing changes for the UI when no event was created or
+     * meaningfully updated, so the cached payload (and its country entries) stay.
+     *
+     * @param  array{created: int, updated: int, countries: array<int, int>}  $counts
+     */
+    private function invalidateCaches(array $counts): void
+    {
+        if ($counts['created'] + $counts['updated'] === 0) {
+            return;
+        }
+
+        Cache::forget('dashboard:current:v1');
+
+        foreach ($counts['countries'] as $countryId) {
+            Cache::forget("country-alerts:{$countryId}:v1");
+        }
+    }
+
+    /**
      * Upsert by (source, external_id). Existing rows keep first_seen_at, country and alert fields.
      *
-     * @return array{created: int, updated: int}
+     * @return array{created: int, updated: int, countries: array<int, int>} `countries` are the ids of
+     *                                                                       every country whose events changed (old and new)
      */
     private function persist(string $source, FetchResult $result): array
     {
@@ -135,7 +163,7 @@ class DisasterSyncService
         }
 
         if ($rows === []) {
-            return ['created' => 0, 'updated' => 0];
+            return ['created' => 0, 'updated' => 0, 'countries' => []];
         }
 
         $this->countryResolver->flush();
@@ -147,7 +175,7 @@ class DisasterSyncService
                 DisasterEvent::query()
                     ->where('source', $source)
                     ->whereIn('external_id', $ids)
-                    ->get(['external_id', 'latitude', 'longitude', 'country_status', 'source_meta'])
+                    ->get(EventChangeDetector::columns())
                     ->each(function (DisasterEvent $event) use (&$before): void {
                         $before[$event->external_id] = $event;
                     });
@@ -157,11 +185,32 @@ class DisasterSyncService
                 DisasterEvent::query()->upsert($chunk, ['source', 'external_id'], NormalizedEvent::updatableColumns());
             }
 
-            $this->resolveCountries($source, $rows, $before);
+            $countries = $this->resolveCountries($source, $rows, $before);
 
-            $existing = count($before);
+            $created = 0;
+            $updated = 0;
+            $affected = [];
 
-            return ['created' => count($rows) - $existing, 'updated' => $existing];
+            foreach ($rows as $externalId => $row) {
+                $old = $before[$externalId] ?? null;
+                $countryChanged = isset($countries[$externalId]) && $countries[$externalId]['changed'];
+
+                if ($old === null) {
+                    $created++;
+                } elseif ($countryChanged || EventChangeDetector::differs($row, $old)) {
+                    $updated++;
+                } else {
+                    continue;
+                }
+
+                foreach ([$old?->country_id, $countries[$externalId]['new'] ?? $old?->country_id] as $countryId) {
+                    if ($countryId !== null) {
+                        $affected[(int) $countryId] = (int) $countryId;
+                    }
+                }
+            }
+
+            return ['created' => $created, 'updated' => $updated, 'countries' => array_values($affected)];
         });
     }
 
@@ -171,9 +220,12 @@ class DisasterSyncService
      *
      * @param  array<string, array<string, mixed>>  $rows  upsert rows by external id
      * @param  array<string, DisasterEvent>  $before  stored events before the upsert
+     * @return array<string, array{new: int|null, changed: bool}> the events that were resolved again
      */
-    private function resolveCountries(string $source, array $rows, array $before): void
+    private function resolveCountries(string $source, array $rows, array $before): array
     {
+        $resolved = [];
+
         foreach ($rows as $externalId => $row) {
             $old = $before[$externalId] ?? null;
             $meta = (array) json_decode((string) $row['source_meta'], true);
@@ -197,7 +249,14 @@ class DisasterSyncService
                 ->where('source', $source)
                 ->where('external_id', $externalId)
                 ->update($resolution->toColumns());
+
+            $resolved[$externalId] = [
+                'new' => $resolution->countryId,
+                'changed' => $old !== null && ($old->country_id !== $resolution->countryId || $old->country_status !== $resolution->status),
+            ];
         }
+
+        return $resolved;
     }
 
     private function sameCoordinate(mixed $stored, mixed $incoming): bool
