@@ -34,7 +34,7 @@ import { ShieldAlert } from '@lucide/vue';
                     >
                         <strong class="text-foreground">Safety Notice:</strong>
                         Telemetry is compiled from automated public APIs (GDACS,
-                        USGS, NASA EONET, Open-Meteo). In emergency situations,
+                        USGS, Open-Meteo). In emergency situations,
                         strictly follow directives from national disaster
                         management offices (NDMOs) and local civil defense
                         authorities.

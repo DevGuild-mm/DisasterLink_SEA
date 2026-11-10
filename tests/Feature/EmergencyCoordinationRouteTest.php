@@ -1,10 +1,6 @@
 <?php
 
 use App\Models\Shelter;
-use App\Services\Disaster\GdacsService;
-use App\Services\Disaster\NasaEonetService;
-use App\Services\Disaster\OpenMeteoService;
-use App\Services\Disaster\UsgsService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Inertia\Testing\AssertableInertia as Assert;
 
@@ -12,22 +8,6 @@ uses(RefreshDatabase::class);
 
 beforeEach(function () {
     config(['modules.coordination' => true]);
-    $mockMeta = fn (string $source) => [
-        'source' => $source,
-        'name' => strtoupper($source),
-        'status' => 'Live',
-        'is_fresh' => true,
-        'is_stale' => false,
-        'last_successful_fetch' => '2026-11-09T00:00:00Z',
-        'latest_event_time' => '2026-11-09T00:00:00Z',
-        'documentation_url' => 'https://example.com',
-    ];
-
-    $this->mock(GdacsService::class, fn ($m) => $m->shouldReceive('getEvents')->andReturn(['events' => [], 'meta' => $mockMeta('GDACS')]));
-    $this->mock(UsgsService::class, fn ($m) => $m->shouldReceive('getEvents')->andReturn(['events' => [], 'meta' => $mockMeta('USGS')]));
-    $this->mock(NasaEonetService::class, fn ($m) => $m->shouldReceive('getEvents')->andReturn(['events' => [], 'meta' => $mockMeta('NASA')]));
-    $this->mock(OpenMeteoService::class, fn ($m) => $m->shouldReceive('getWeather')->andReturn(['weather' => [], 'meta' => $mockMeta('OpenMeteo')]));
-
     Shelter::create([
         'name' => 'Bangkok Emergency Triage Facility',
         'type' => Shelter::TYPE_EVACUATION_CENTER,

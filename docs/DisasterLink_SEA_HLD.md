@@ -10,7 +10,7 @@
 | Item | Value |
 |---|---|
 | Document | High-Level Design — DisasterLink SEA |
-| Version | **1.4** |
+| Version | **1.5** (implementation record of Phase 5; no new requirements) |
 | Revision date | 10 November 2026 |
 | Path | `docs/DisasterLink_SEA_HLD.md` (canonical HLD) |
 | Related document | `docs/ASEAN_LOCATION_DATA_RESEARCH.md`. It researched **State/Province (ADM1)** data for the earlier v1.1 design. In v1.2 it is a **reference only** (licensing approach, geoBoundaries findings). The State/Province dataset it recommends is **not** part of the MVP. |
@@ -29,8 +29,9 @@
 
 | **1.3** | **10 Nov 2026** | **Local-first MVP and simplifications** (§27, Proposed, pending team approval). Main changes:<br>• **Production deployment deferred** (Oracle Cloud, Resend, MySQL server, Supervisor, TLS, backups) to a later phase. The MVP must work end to end on a developer machine.<br>• **Recency counts from escalation:** an event that becomes Orange/Red after it started can still alert.<br>• **USGS may take its country from a linked GDACS record** (OQ-2 = yes).<br>• **Simpler alert reliability:** no event leases; one `alerts:dispatch` command; delivery quota counted from the database.<br>• **Heartbeats and `Cache::flexible` dropped.**<br>• **ADM0 provider proposed:** Natural Earth Admin-0 (public domain).<br>• Revised 7-day local roadmap. |
 | **1.4** | **10 Nov 2026** | **Cache layer and the three data operations** (§28, approved requirements; no code changed). Main changes:<br>• **Target flow documented:** GDACS/USGS → `DisasterSyncService` ← Scheduler / Admin manual sync → MySQL → Cache → `DashboardQueryService` → UI.<br>• **Single cache strategy:** `Cache::remember` cache-aside on the `database` driver, with a generation counter; `Cache::flexible` text removed.<br>• **Invalidation only after commit and only on relevant change;** failed and no-change syncs leave the cache alone; source health and `data_as_of` are read live.<br>• **Admin manual sync** is a queued, unique, throttled job with queued / running / success / failed states and a per-source result.<br>• **Public "Reload data" never calls GDACS/USGS;** admin button is "Sync from sources".<br>• **Reliability values calculated:** run deadline, lock TTL, `withoutOverlapping(10)`, job timeout, queue `retry_after`; abandoned-run sweep.<br>• Phase 2 follow-ups listed with their true state; real Phase 2 component names recorded.<br>• **Clarified:** four statuses plus a nullable `warning_message` ("Success with warnings" is a display state); atomic claim of queued rows; a job that cannot get the lock exits; `sync_runs` is extended (with `request_uuid`) instead of a `sync_requests` table. |
+| **1.5** | **10 Nov 2026** | **Phase 5 implementation record (§29).** Phase 5 (pages served from MySQL through a generation-keyed cache) is built, so statements that the public pages call GDACS, USGS, EONET or Open-Meteo, that `DashboardCache` / `DashboardQueryService` are future work, and that v1.4 changed no code, are marked as historical with a pointer to §29. §29 lists every difference between the design (§28) and the code, including: the public event id format, 404 for unknown events, the removed weather fields, the weather refresh schedule and lock, the 7-day window, and one decided design question (UD-6: a stale dashboard payload may be served for up to 300 s if cache invalidation fails). Earlier text is kept; it is annotated, not rewritten. |
 
-v1.2 **supersedes** the State/Province design of v1.1. Where v1.1 and v1.2 differ, v1.2 applies. **Where v1.3 (§27) differs from earlier sections, §27 applies. Where v1.4 (§28) differs from any earlier section, §28 applies.**
+v1.2 **supersedes** the State/Province design of v1.1. Where v1.1 and v1.2 differ, v1.2 applies. **Where v1.3 (§27) differs from earlier sections, §27 applies. Where v1.4 (§28) differs from any earlier section, §28 applies. Where §29 (v1.5) records how Phase 5 was actually built, §29 describes the implemented state and lists every difference from §28.**
 
 ### 1.2 Labels
 
@@ -158,6 +159,8 @@ DisasterLink SEA is a disaster-awareness web platform for the 11 ASEAN countries
 This section records what the repository does **today**. It is unchanged in substance since v1.0.
 
 ### 5.1 Summary
+
+> **Historical (As-Is, before the MVP work).** This section and the diagram below describe the code as inspected at the start. The request-path services named here (`GdacsService`, `UsgsService`, `NasaEonetService`, `OpenMeteoService`) were **removed in Phase 5**; the pages now read MySQL only (§29). Kept to show where the design started.
 
 The app is a **read-through cache over four external APIs**. Nothing about disasters is stored in the database.
 
@@ -858,7 +861,7 @@ An event is **alert-eligible** when **all** of these hold:
   5. record the run in `sync_runs` / `data_sources`.
 - **Failure:** the snapshot and cache are untouched (the last good data stays). The run is recorded as failed and the error stored.
 - **Public reads never call Open-Meteo:** browser → Laravel → cache → (on a miss) `capital_weather` → response.
-- **The Weather UI is unchanged.**
+- **The Weather UI is unchanged.** *(v1.5: not fully met. The snapshot has no columns for four old fields, so the UI no longer shows them. See §29.4.)*
 - **No selected-city weather, no city picker, no on-demand weather endpoint, no city cache keys.**
 
 ### 14.2 Weather freshness
@@ -1065,7 +1068,7 @@ All timestamps are stored in **UTC**.
 |---|---|---|
 | `disaster:sync usgs` | **every 5 min** | `withoutOverlapping(10)` *(code currently uses the 24 h default: Future work, §28.11 item 4)* |
 | `disaster:sync gdacs` | **every 15 min** (`2-59/15 * * * *`) | `withoutOverlapping(10)` |
-| `weather:refresh-capitals` | **every 30 min** (`12,42 * * * *`) | `withoutOverlapping()` |
+| `weather:refresh-capitals` | **every 30 min** (`12,42 * * * *`) **[Implemented, Phase 5]** | `withoutOverlapping()` *(v1.5: implemented as `withoutOverlapping(10)`, like the event syncs, plus a 300 s `sync:open_meteo` lock; see §29.3)* |
 | `alerts:recover` | every 5 min | `withoutOverlapping()` |
 | `scheduler:heartbeat` | every minute | Writes `last_scheduler_tick` (monitoring) |
 | `model:prune` (`sync_runs`, `raw_payload`) | daily | |
@@ -1944,6 +1947,8 @@ None of these affects the core flow in §27.2.
 > **Status: [Approved v1.4 requirements]** (approved by the project owner on 10 Nov 2026). Where this section conflicts with §1–§27, **this section applies**, and the earlier sections carry a pointer to it. Business rules, thresholds, alert eligibility, scope and security rules are **unchanged**.
 >
 > **No application code, migration, config or test was changed to write v1.4.** Every item is labelled by its real state (§28.1). Nothing marked [Future work] is implemented or verified.
+>
+> **v1.5 note:** this describes the document at v1.4. Phase 5 has since been built; §29 records what is now implemented and every difference from this section. The [Future work] labels for Phase 5 items below are kept as history and annotated.
 
 ### 28.1 Labels used in this section
 
@@ -1966,7 +1971,7 @@ None of these affects the core flow in §27.2.
 | Stuck `running` runs | **[Missing]** A crashed run leaves `sync_runs.status = running` and `data_sources.last_status = running` forever. |
 | HTTP 429 `Retry-After` | **[Exists, Verified]** Honoured up to `max_retry_after_seconds` (30); longer values fail the run. Covered by tests in `tests/Feature/DisasterSyncTest.php` (commit `ed3cdc8`). |
 | GDACS `eventlist` filter | **[Verified]** See §28.11 item 2. |
-| Public pages and `?refresh=1` | **[Exists, legacy]** `DisasterDashboardController` / `DisasterDashboardService` still call GDACS, USGS, EONET and Open-Meteo on a cache miss and on `?refresh=1`. Replaced in Phase 5. |
+| Public pages and `?refresh=1` | **[Exists, legacy at v1.4; replaced in Phase 5, see §29]** `DisasterDashboardController` / `DisasterDashboardService` called GDACS, USGS, EONET and Open-Meteo on a cache miss and on `?refresh=1`. They no longer do. |
 | Cache driver | **[Exists]** `CACHE_STORE=database` (`.env`, `.env.example`, `config/cache.php`); `cache` and `cache_locks` tables exist. Tests use `array`. |
 | `GdacsService`, `UsgsService`, `DisasterEventUpserter` named in §6.2 | **[Superseded]** Phase 2 built `GdacsClient`, `UsgsClient` (both extend `SourceClient`), `NormalizedEvent`, `FetchResult`, `SafeUrl`, `SourceFetchException` and `DisasterSyncService` in `app/Services/Disaster/Sync/`. Upsert lives in `DisasterSyncService::persist()`. |
 
@@ -2011,8 +2016,8 @@ Rules this diagram enforces:
 | `DisasterSyncService` | Lock, `sync_runs` / `data_sources` bookkeeping, fetch via a client, transactional upsert, change detection, post-commit cache invalidation | [Exists], change detection / deadline / sweep are [Future work] |
 | `GdacsClient`, `UsgsClient` (`SourceClient`) | Fetch + validate + normalise only: TLS on, no cache, no `uniqid` | [Exists] |
 | `RunSourceSync` (queued job, `ShouldBeUnique`) | Calls `DisasterSyncService` for one source for an admin request | [Future work] (Phase 6) |
-| `DashboardCache` | Keys, TTLs, generation counter, rebuild lock, reload coalescing, invalidation | [Future work] (Phase 5) |
-| `DashboardQueryService` | Builds the dashboard payload from MySQL; cache-aside; merges live source status | [Future work] (Phase 5) |
+| `DashboardCache` | Keys, TTLs, generation counter, rebuild lock, reload coalescing, invalidation | [Future work at v1.4] **[Implemented, Phase 5, §29]** |
+| `DashboardQueryService` | Builds the dashboard payload from MySQL; cache-aside; merges live source status | [Future work at v1.4] **[Implemented, Phase 5, §29]** |
 | `SourceHealthService` | Status and `data_as_of` from `data_sources`, always read live | [Future work] (Phase 6) |
 
 ### 28.4 The three operations [Approved]
@@ -2228,7 +2233,7 @@ The scheduler path has no queued row: `DisasterSyncService::sync()` returns `nul
 | **2 Data sync (done)** | Follow-ups 3, 4, 5, 6 of §28.11 and the sweep (§28.10) are **small, separate tasks, not yet done**. `Cache::forget('dashboard:current:v1')` in `DisasterSyncService` is replaced by a call to `DashboardCache::invalidateAfterSync(...)` once Phase 5 creates it; until then change detection (item 3) can ship with a temporary call. |
 | **3 Country detection** | Country resolution runs **before** invalidation, so a country change counts as a relevant change and `country-alerts:{id}` can be cleared for the old and new country. |
 | **4 Email alerts** | No change. Alert dispatch stays after commit and independent of the cache. |
-| **5 Fast pages** | Create `DashboardCache` and `DashboardQueryService` (§28.5–§28.7); `?refresh=1` rebuilds from MySQL and **never** calls an external API; remove `DisasterDashboardService` external calls, the unreachable `$forceRefresh`, and the "Refresh" / "Syncing..." wording; add "Reload data", `generated_at` and `data_as_of`. |
+| **5 Fast pages** | Create `DashboardCache` and `DashboardQueryService` (§28.5–§28.7); `?refresh=1` rebuilds from MySQL and **never** calls an external API; remove `DisasterDashboardService` external calls, the unreachable `$forceRefresh`, and the "Refresh" / "Syncing..." wording; add "Reload data", `generated_at` and `data_as_of`. **[Done in Phase 5; differences in §29.]** |
 | **6 Guides / contacts / admin** | `POST /admin/data-sources/refresh`, `RunSourceSync` with the lock-then-claim start sequence and the lock-unavailable exit (§28.8), the single `sync_runs` migration (columns in §28.8), the polling UI with the "Success with warnings" badge, the worker-not-running warning, `SourceHealthService`. |
 | **8 Final check** | Tests: cache hit / miss; Reload never calls HTTP (`Http::preventStrayRequests`); reload coalescing; a read after a sync never serves pre-sync data; **stale-reader test** (a reader that started before the generation bump cannot overwrite the new generation); no invalidation on failed sync or no-change sync; invalidation on a relevant change; 403 for non-admins; throttle; cooldown; unique job; `queued` stays `queued` without a worker; sweep marks an abandoned run failed but not a live one; an expired queued row is not run by a late worker (claim returns 0 rows); a job that cannot get the lock exits, deletes its unclaimed row and leaves no `running` or `failed` row; `all` creates two rows with one `request_uuid`; a warning run stays `status = success`; `retry_after` > job timeout asserted from config; run on MySQL as well as SQLite. |
 
@@ -2254,6 +2259,89 @@ The scheduler path has no queued row: `DisasterSyncService::sync()` returns `nul
 | ~~UD-3~~ | **Decided:** extend `sync_runs` (columns in §28.8) and group an `all` request with `request_uuid`; no `sync_requests` table | — |
 | UD-4 | Whether Reload should invalidate the shared dashboard for everyone (chosen) or only bypass it for the caller | Shared invalidation, 10 s coalescing |
 | UD-5 | `.env.example` still has SQLite defaults; changing it needs agreement with the collaborator | Unchanged |
+| ~~UD-6~~ | **Decided (Option 1, accept bounded staleness).** If a sync commits while the cache store is unavailable, invalidation can fail, and an old-generation dashboard payload may be served for **up to 300 s** after the successful sync. This is a **bounded-staleness** guarantee, not an absolute freshness guarantee. A MySQL-backed generation counter (Option 2) is kept as a possible future improvement (§29.5). | Accepted for the MVP: no code change |
+
+---
+
+## 29. v1.5: Phase 5 Implementation Record
+
+> **Status: [Implemented and tested locally; not yet committed at the time of writing].** This section records what Phase 5 actually built. It does not change a requirement. Where the code differs from §28, the difference is listed in §29.3 so no one reads §28 as if it had been built exactly as written. §28 is kept as the design history.
+
+### 29.1 What now exists
+
+| Item | State | Where |
+|---|---|---|
+| Public pages read MySQL (through the cache) only | **[Implemented]** The only code that calls GDACS or USGS is `SourceClient` (reached from `disaster:sync`), and the only code that calls Open-Meteo is `WeatherRefreshService` (reached from `weather:refresh-capitals`) | `app/Services/Disaster/Sync/SourceClient.php`, `app/Services/Disaster/Weather/WeatherRefreshService.php` |
+| `DashboardCache` | **[Implemented]** keys, TTLs, generation counter, rebuild lock, 10 s reload window, invalidation, fall-back to MySQL when the cache store fails | `app/Services/Disaster/Dashboard/DashboardCache.php` |
+| `DashboardQueryService` | **[Implemented]** builds the payload from `disaster_events` (canonical rows), `capital_weather` and verified community reports; merges live source status | `app/Services/Disaster/Dashboard/DashboardQueryService.php` |
+| `SourceHealthService` | **[Implemented early]** the HLD planned it for Phase 6 | `app/Services/Disaster/Dashboard/SourceHealthService.php` |
+| Public "Reload data" | **[Implemented]** `GET /api/disaster-dashboard?refresh=1` rebuilds from MySQL, never calls a provider | `app/Http/Controllers/DisasterDashboardController.php` |
+| Weather refresh | **[Implemented]** `weather:refresh-capitals`, scheduled; stores `capital_weather`; records `sync_runs` / `data_sources` (`open_meteo`) | `app/Console/Commands/RefreshCapitalWeather.php`, `routes/console.php` |
+| Legacy services removed | **[Done]** `GdacsService`, `UsgsService`, `NasaEonetService`, `OpenMeteoService`, the `services.disaster_apis` config and the matching `.env.example` lines | n/a |
+| EONET | **[Removed]** from payload, types and UI | `resources/js/**` |
+| Wording | **[Done]** "Refresh" / "Syncing..." became "Reload data" / "Loading…"; the header shows "Data as of" (`data_as_of`) | `DisasterHeader.vue` and the pages that pass `data-as-of` |
+| Sync cache invalidation | **[Done]** `DisasterSyncService` calls `DashboardCache::invalidateAfterSync()` instead of `Cache::forget('dashboard:current:v1')` | `DisasterSyncService.php` |
+| Tests | **[Done]** `DashboardCacheTest`, `WeatherRefreshTest`, a rewritten `DisasterTelemetryTest`, and updated sync, telemetry, intelligence and coordination tests. Cache checks use the generation number | `tests/Feature/` |
+
+### 29.2 Corrections to earlier statements (history kept)
+
+| Earlier statement | Now |
+|---|---|
+| §3, §5 (As-Is): the pages call GDACS, USGS, EONET and Open-Meteo through four services | True of the starting code only. Removed in Phase 5. |
+| §28.2: public pages and `?refresh=1` "[Exists, legacy]" | Replaced; Reload reads MySQL only. |
+| §28.3: `DashboardCache` and `DashboardQueryService` "[Future work]" | Implemented. |
+| §28 banner: "No application code ... was changed to write v1.4" | Still true for v1.4. Phase 5 code was written afterwards. |
+| §14.1: "The Weather UI is unchanged." | Not met, see §29.4. |
+| §17.1: weather `withoutOverlapping()` | Implemented as `withoutOverlapping(10)` plus a service lock, see §29.3. |
+| §28.12 Phase 5 row | Done, with the differences below. |
+
+### 29.3 Differences between §28 and the code
+
+| # | Topic | Design | Implemented | Why |
+|---|---|---|---|---|
+| 1 | **Public event id** | Not specified | `{source}_{external_id}`, for example `gdacs_TC:2001`, `usgs_us6000abc`. The colon works raw or as `%3A`. Old ids such as `gdacs_eq_1532820` no longer resolve. Community reports keep their own ids | The stored identity is `(source, external_id)`; the old id was built from the provider payload |
+| 2 | **Unknown event** | Not specified | `GET /events/{id}` returns **404** for an id that is not a stored GDACS/USGS event or a *verified* community report. Pending, under-review and rejected reports are not public | An empty 200 page hid dead links |
+| 3 | **Live window** | "Recent / active" (§28.5) | Canonical events with `occurred_at` in the last **7 days**, at most **500** rows. An event page opens by id at any age | Keeps the payload small |
+| 4 | **Unresolved events** | `country_status` rules in §12 | `resolved` events show their country. `unresolved` events show as "Regional / Unattributed". `outside_region` events are hidden | Needed a display rule |
+| 5 | **`data_as_of`** | "Last successful source sync" | The **older** of the GDACS and USGS `last_success_at`. A source is Live within 2 x its interval, Stale after that, Unavailable if it never succeeded | An old source must not be hidden by a fresh one |
+| 6 | **Source health** | `SourceHealthService` in Phase 6 | Built in Phase 5, read live, never cached | The pages needed it |
+| 7 | **Weather refresh** | Phase 5 did not list it (§28.12) | Built in Phase 5 because the pages no longer call Open-Meteo. Lock `sync:open_meteo` 300 s; schedule `12,42 * * * *` with `withoutOverlapping(10)`; two retries (2 s, 5 s) on connection errors and 5xx; no `Retry-After` handling and no total deadline (unlike `SourceClient`) | Without it the weather would be empty |
+| 8 | **Reload throttle** | Route middleware `throttle:6,1` | `RateLimiter` in the controller: 6 per minute per IP, then **429** with `Retry-After`. Plain polling is not limited by it | Applies only to `refresh=1` |
+| 9 | **Invalidation timing** | "After commit (`DB::afterCommit`)" | Called after the sync's transaction closure returns | Equivalent unless a caller wraps the sync in an outer transaction; none does |
+| 10 | **`country-alerts:{id}:v1`** | Written by the Welcome page | Only **cleared** on a change; nothing writes it yet | The Welcome country alerts area is not built |
+| 11 | **Weather in the payload** | Part of the cached dashboard | Read through `weather:capitals:v1` (35 min), then MySQL | As §16.3 |
+
+### 29.4 Weather fields no longer shown
+
+`capital_weather` (§14) has no columns for four fields the old UI used. The payload still sends the keys so the page does not break:
+
+| Field | Now | Visible effect |
+|---|---|---|
+| `apparent_temperature_c` | `null` | Country weather card shows "Feels: —" |
+| `forecast_precipitation_sum_mm` | `null` | Country weather card shows "—" (it showed "0 mm" until the Phase 5 review fix) |
+| `wind_direction_deg` | `null` | Not displayed by any component |
+| `is_day` | always `true` | Not used by any component |
+
+Temperature, condition, rain, wind speed, humidity and the daily minimum and maximum are unchanged. Restoring the four fields needs new `capital_weather` columns and a migration (not part of Phase 5).
+
+### 29.5 Decided: cache invalidation when the cache store is down (UD-6)
+
+> **Decision (project owner, 10 Nov 2026): Option 1, accept the bounded 300-second stale window for the current MVP.** Nothing was implemented for this decision: no code, migration or configuration change.
+
+**The failure.** `DashboardCache::invalidateAfterSync()` catches and logs a cache failure, so a sync never fails because of the cache. This means invalidation **can fail** when the cache store is unavailable. If MySQL commits the sync in that moment, the generation counter is not bumped.
+
+**The effect.** When the cache store recovers, a dashboard payload stored under the old generation is still a valid cache entry. It may be served for **up to 300 seconds** (`DashboardCache::PAYLOAD_TTL`) after the successful sync, until its TTL ends. After that, the next read rebuilds from MySQL. Data reached through the event detail page (`/events/{id}`) is read straight from MySQL and is not affected.
+
+**What is and is not guaranteed.**
+
+| | |
+|---|---|
+| Guaranteed | **Bounded staleness.** Pre-sync dashboard data is served for at most 300 s after a successful sync, even when invalidation fails. When invalidation succeeds, the next read after the commit never serves pre-sync data (tests in `DashboardCacheTest.php`). |
+| Not guaranteed | **Absolute freshness.** The design does not promise that pre-sync data is never served after a successful sync. The generation counter lives in the same cache store that has failed, so it cannot protect against its own outage. |
+
+**`CACHE_STORE=database` and a MySQL outage.** The cache and the generation counter are stored in MySQL (the `cache` and `cache_locks` tables). A full MySQL outage therefore stops the cache, the generation counter and the dashboard data together: the pages cannot be served from either, and no stale payload can be served from anywhere else. The stale window above applies only when the cache store fails while the sync's own writes succeed, for example a problem limited to the cache tables or the cache connection.
+
+**Future option (not implemented).** *Option 2:* keep the generation counter in MySQL (a small table or a column), written in the same transaction as the sync, and read it on every request before the cache lookup. This would turn bounded staleness into a freshness guarantee, at the cost of one extra query per read and one migration. Revisit it only if stricter freshness becomes a requirement. Options 3 (retry or queue the invalidation) and 4 (compare a data timestamp on every read) were reviewed and not chosen.
 
 ---
 

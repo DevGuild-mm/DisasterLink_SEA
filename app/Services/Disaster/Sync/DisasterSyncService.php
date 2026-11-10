@@ -7,6 +7,7 @@ use App\Models\DataSource;
 use App\Models\DisasterEvent;
 use App\Models\SyncRun;
 use App\Services\Disaster\Alerts\AlertEligibility;
+use App\Services\Disaster\Dashboard\DashboardCache;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -40,6 +41,7 @@ class DisasterSyncService
         private CountryResolver $countryResolver,
         private EarthquakeLinker $linker,
         private AlertEligibility $eligibility,
+        private DashboardCache $dashboardCache,
     ) {
         $this->clients = [
             $gdacs->key() => $gdacs,
@@ -165,11 +167,7 @@ class DisasterSyncService
             return;
         }
 
-        Cache::forget('dashboard:current:v1');
-
-        foreach ($counts['countries'] as $countryId) {
-            Cache::forget("country-alerts:{$countryId}:v1");
-        }
+        $this->dashboardCache->invalidateAfterSync($counts['countries']);
     }
 
     /**

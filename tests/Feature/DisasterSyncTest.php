@@ -8,6 +8,7 @@ use App\Models\DisasterAlertLog;
 use App\Models\DisasterEvent;
 use App\Models\SyncRun;
 use App\Models\User;
+use App\Services\Disaster\Dashboard\DashboardCache;
 use App\Services\Disaster\Sync\DisasterSyncService;
 use App\Services\Disaster\Sync\SafeUrl;
 use App\Services\Disaster\Sync\SourceFetchException;
@@ -26,6 +27,11 @@ use Illuminate\Support\Sleep;
 
 const GDACS_URL = 'https://www.gdacs.org/gdacsapi/api/events/geteventlist/SEARCH*';
 const USGS_URL = 'https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson*';
+
+function dashboardGeneration(): int
+{
+    return app(DashboardCache::class)->generation();
+}
 
 beforeEach(function () {
     $this->seed(DataSourceSeeder::class);
@@ -434,13 +440,13 @@ test('a success resets failures and records counts', function () {
         ->and(SyncRun::where('source_key', 'usgs')->count())->toBe(1);
 });
 
-test('a successful sync that created an event clears the dashboard cache', function () {
-    Cache::put('dashboard:current:v1', ['stale' => true], 300);
+test('a successful sync that created an event moves the dashboard to a new generation', function () {
+    $generation = dashboardGeneration();
     Http::fake([GDACS_URL => Http::response(gdacsResponse([gdacsFeature()]))]);
 
     app(DisasterSyncService::class)->sync('gdacs');
 
-    expect(Cache::has('dashboard:current:v1'))->toBeFalse();
+    expect(dashboardGeneration())->toBeGreaterThan($generation);
 });
 
 test('a run is skipped while another run of the same source holds the lock', function () {
@@ -786,7 +792,7 @@ test('a resync with nothing meaningful changed counts no update and keeps the ca
     $before = DisasterEvent::first();
 
     $this->travel(10)->minutes();
-    Cache::put('dashboard:current:v1', ['cached' => true], 300);
+    $generation = dashboardGeneration();
     // Only values that are not meaningful differ: raw_payload (an extra unmapped property) and the seen timestamps.
     $run = syncGdacsWith(gdacsFeature(['properties' => ['unmapped_noise' => 'changes every poll']]));
     $after = DisasterEvent::first();
@@ -795,31 +801,31 @@ test('a resync with nothing meaningful changed counts no update and keeps the ca
         ->and($run->created_count)->toBe(0)
         ->and($run->updated_count)->toBe(0)
         ->and($run->processed_count)->toBe(0)
-        ->and(Cache::get('dashboard:current:v1'))->toBe(['cached' => true])
+        ->and(dashboardGeneration())->toBe($generation)
         ->and($after->last_seen_at->isAfter($before->last_seen_at))->toBeTrue()
         ->and($after->raw_payload)->not->toEqual($before->raw_payload);
 });
 
 test('an empty successful sync keeps the cache', function () {
-    Cache::put('dashboard:current:v1', ['cached' => true], 300);
+    $generation = dashboardGeneration();
     resetHttp();
     Http::fake([GDACS_URL => Http::response(gdacsResponse([]))]);
 
     app(DisasterSyncService::class)->sync('gdacs');
 
-    expect(Cache::get('dashboard:current:v1'))->toBe(['cached' => true]);
+    expect(dashboardGeneration())->toBe($generation);
 });
 
 test('a meaningful change counts one update and clears the cache', function (array $change) {
     syncGdacsWith(gdacsFeature());
-    Cache::put('dashboard:current:v1', ['cached' => true], 300);
+    $generation = dashboardGeneration();
 
     $run = syncGdacsWith(gdacsFeature($change));
 
     expect($run->created_count)->toBe(0)
         ->and($run->updated_count)->toBe(1)
         ->and($run->processed_count)->toBe(1)
-        ->and(Cache::has('dashboard:current:v1'))->toBeFalse();
+        ->and(dashboardGeneration())->toBeGreaterThan($generation);
 })->with([
     'alert level' => [['properties' => ['alertlevel' => 'Red']]],
     'title' => [['properties' => ['name' => 'Tropical Cyclone RENAMED']]],
@@ -901,20 +907,20 @@ test('a country entry is cleared only for countries whose events changed', funct
 test('a failed sync keeps the cache and every stored event unchanged', function () {
     syncGdacsWith(gdacsFeature());
     $before = DisasterEvent::first()->toArray();
-    Cache::put('dashboard:current:v1', ['cached' => true], 300);
+    $generation = dashboardGeneration();
 
     resetHttp();
     Http::fake([GDACS_URL => Http::response('boom', 500)]);
     $run = app(DisasterSyncService::class)->sync('gdacs');
 
     expect($run->status)->toBe('failed')
-        ->and(Cache::get('dashboard:current:v1'))->toBe(['cached' => true])
+        ->and(dashboardGeneration())->toBe($generation)
         ->and(DisasterEvent::first()->toArray())->toBe($before);
 });
 
 test('a database failure while saving rolls everything back and keeps the cache', function () {
     syncGdacsWith(gdacsFeature());
-    Cache::put('dashboard:current:v1', ['cached' => true], 300);
+    $generation = dashboardGeneration();
     $before = DisasterEvent::first()->toArray();
 
     DB::listen(function ($query) {
@@ -929,7 +935,7 @@ test('a database failure while saving rolls everything back and keeps the cache'
 
     expect($run->status)->toBe('failed')
         ->and($run->error_message)->toContain('simulated failure')
-        ->and(Cache::get('dashboard:current:v1'))->toBe(['cached' => true])
+        ->and(dashboardGeneration())->toBe($generation)
         ->and(DisasterEvent::first()->toArray())->toBe($before);
 });
 
@@ -1004,7 +1010,7 @@ test('retries stop when the next wait would pass the deadline and the run fails 
     config(['disaster_sources.sync.deadline_seconds' => 3]);
     syncGdacsWith(gdacsFeature());
     $before = DisasterEvent::first()->toArray();
-    Cache::put('dashboard:current:v1', ['cached' => true], 300);
+    $generation = dashboardGeneration();
 
     resetHttp();
     Http::fake([GDACS_URL => Http::response('down', 503)]);
@@ -1018,7 +1024,7 @@ test('retries stop when the next wait would pass the deadline and the run fails 
         ->and($run->error_message)->toContain('total time limit of 3 s')
         ->and(DataSource::find('gdacs')->consecutive_failures)->toBe(1)
         ->and(DisasterEvent::first()->toArray())->toBe($before)
-        ->and(Cache::get('dashboard:current:v1'))->toBe(['cached' => true]);
+        ->and(dashboardGeneration())->toBe($generation);
 });
 
 test('no request starts once the deadline has passed', function () {

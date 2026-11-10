@@ -6,6 +6,7 @@ use App\Models\Shelter;
 use App\Services\Disaster\DisasterDashboardService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\RateLimiter;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -20,7 +21,6 @@ class DisasterDashboardController extends Controller
      */
     public function home(): Response
     {
-        @set_time_limit(120);
         $dashboardData = $this->dashboardService->getDashboardData();
 
         return Inertia::render('Welcome', [
@@ -33,7 +33,6 @@ class DisasterDashboardController extends Controller
      */
     public function overview(): Response
     {
-        @set_time_limit(120);
         $dashboardData = $this->dashboardService->getDashboardData();
 
         return Inertia::render('Overview', [
@@ -46,7 +45,6 @@ class DisasterDashboardController extends Controller
      */
     public function map(): Response
     {
-        @set_time_limit(120);
         $dashboardData = $this->dashboardService->getDashboardData();
         $shelters = config('modules.coordination') ? Shelter::all() : [];
 
@@ -61,7 +59,6 @@ class DisasterDashboardController extends Controller
      */
     public function events(): Response
     {
-        @set_time_limit(120);
         $dashboardData = $this->dashboardService->getDashboardData();
 
         return Inertia::render('EventsPage', [
@@ -70,12 +67,12 @@ class DisasterDashboardController extends Controller
     }
 
     /**
-     * Display Individual Disaster Event Details Page.
+     * Display Individual Disaster Event Details Page. An unknown event id is a 404.
      */
     public function eventDetail(string $id): Response
     {
-        @set_time_limit(120);
-        $event = $this->dashboardService->getEventById($id);
+        $event = $this->dashboardService->getEventById($id)
+            ?? abort(404, 'Disaster event not found.');
         $dashboardData = $this->dashboardService->getDashboardData();
 
         return Inertia::render('EventDetailPage', [
@@ -90,9 +87,7 @@ class DisasterDashboardController extends Controller
      */
     public function countries(Request $request, ?string $country = null): Response
     {
-        @set_time_limit(120);
-        $forceRefresh = $request->boolean('refresh');
-        $countryData = $this->dashboardService->getCountryDashboardData($country, $forceRefresh);
+        $countryData = $this->dashboardService->getCountryDashboardData($country);
         $dashboardData = $this->dashboardService->getDashboardData();
 
         return Inertia::render('CountryMonitoringPage', [
@@ -107,9 +102,7 @@ class DisasterDashboardController extends Controller
      */
     public function apiCountries(Request $request, ?string $country = null): JsonResponse
     {
-        @set_time_limit(120);
-        $forceRefresh = $request->boolean('refresh');
-        $countryData = $this->dashboardService->getCountryDashboardData($country, $forceRefresh);
+        $countryData = $this->dashboardService->getCountryDashboardData($country);
 
         return response()->json($countryData);
     }
@@ -119,7 +112,6 @@ class DisasterDashboardController extends Controller
      */
     public function weather(): Response
     {
-        @set_time_limit(120);
         $dashboardData = $this->dashboardService->getDashboardData();
 
         return Inertia::render('WeatherPage', [
@@ -132,7 +124,6 @@ class DisasterDashboardController extends Controller
      */
     public function freshness(): Response
     {
-        @set_time_limit(120);
         $dashboardData = $this->dashboardService->getDashboardData();
 
         return Inertia::render('FreshnessPage', [
@@ -141,14 +132,23 @@ class DisasterDashboardController extends Controller
     }
 
     /**
-     * API endpoint for 60-second periodic background polling and manual refresh.
+     * API endpoint for 60-second background polling and the public "Reload data" button.
+     *
+     * `?refresh=1` rebuilds the payload from MySQL (at most once per 10 s for everyone) and is limited to 6 per
+     * minute per visitor. It never contacts GDACS, USGS or Open-Meteo.
      */
     public function api(Request $request): JsonResponse
     {
-        @set_time_limit(120);
-        $forceRefresh = $request->boolean('refresh');
-        $dashboardData = $this->dashboardService->getDashboardData($forceRefresh);
+        $reload = $request->boolean('refresh');
 
-        return response()->json($dashboardData);
+        if ($reload && ! RateLimiter::attempt('dashboard-reload:'.$request->ip(), 6, fn (): bool => true, 60)) {
+            return response()->json(
+                ['message' => 'Too many reloads. Please wait a moment.'],
+                429,
+                ['Retry-After' => (string) RateLimiter::availableIn('dashboard-reload:'.$request->ip())],
+            );
+        }
+
+        return response()->json($this->dashboardService->getDashboardData($reload));
     }
 }

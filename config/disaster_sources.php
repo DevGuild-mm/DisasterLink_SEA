@@ -90,6 +90,15 @@ return [
             'connect_timeout' => 5,
             'retry_delays_ms' => [2000, 5000],
         ],
+        /* Capital weather (HLD §14): one batched request for the 11 capitals, run by `weather:refresh-capitals`. */
+        'open_meteo' => [
+            'name' => 'Open-Meteo',
+            'url' => env('OPEN_METEO_SYNC_URL', 'https://api.open-meteo.com/v1/forecast'),
+            'interval_minutes' => 30,
+            'timeout' => 15,
+            'connect_timeout' => 5,
+            'retry_delays_ms' => [2000, 5000],
+        ],
     ],
 
 ];

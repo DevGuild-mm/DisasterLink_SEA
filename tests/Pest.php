@@ -1,5 +1,11 @@
 <?php
 
+use App\Models\CapitalWeather;
+use App\Models\Country;
+use App\Models\DataSource;
+use App\Models\DisasterEvent;
+use Database\Seeders\CountrySeeder;
+use Database\Seeders\DataSourceSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -44,7 +50,45 @@ expect()->extend('toBeOne', function () {
 |
 */
 
-function something()
+/**
+ * Fill MySQL (the only source the public pages read) with the 11 countries, a capital observation each,
+ * and the given events. Each event: country ISO3 plus any disaster_events attributes.
+ *
+ * @param  array<int, array<string, mixed>>  $events
+ */
+function seedDashboardData(array $events = [], bool $withWeather = true): void
 {
-    // ..
+    (new CountrySeeder)->run();
+    (new DataSourceSeeder)->run();
+
+    $countries = Country::query()->get()->keyBy('iso3');
+
+    if ($withWeather) {
+        foreach ($countries as $country) {
+            CapitalWeather::factory()->create(['country_id' => $country->id, 'temperature_c' => 28.5]);
+        }
+    }
+
+    foreach ($events as $event) {
+        $country = $countries->get($event['iso3'] ?? '');
+        unset($event['iso3']);
+
+        DisasterEvent::factory()->create($event + [
+            'country_id' => $country?->id,
+            'country_status' => $country === null ? 'unresolved' : 'resolved',
+            'occurred_at' => now()->subHours(2),
+        ]);
+    }
+}
+
+/**
+ * Mark both event sources as just synced, so the pages show them as live.
+ */
+function markSourcesSynced(): void
+{
+    DataSource::query()->whereIn('key', ['gdacs', 'usgs', 'open_meteo'])->update([
+        'last_attempt_at' => now(),
+        'last_success_at' => now(),
+        'last_status' => 'success',
+    ]);
 }

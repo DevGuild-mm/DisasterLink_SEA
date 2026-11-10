@@ -20,7 +20,10 @@ import { Button } from '@/components/ui/button';
 import { useAppearance } from '@/composables/useAppearance';
 
 defineProps<{
+    /** When the page data was built (generated_at). */
     lastUpdated: string | null;
+    /** The last successful GDACS/USGS sync (data_as_of). */
+    dataAsOf?: string | null;
     isRefreshing: boolean;
     countdown: number;
     isTabVisible: boolean;
@@ -77,7 +80,7 @@ function isItemActive(href: string): boolean {
 }
 
 function formatTime(isoString: string | null): string {
-    if (!isoString) return 'Syncing...';
+    if (!isoString) return 'Not available';
     if (!isMounted.value) return 'Live';
     try {
         const d = new Date(isoString);
@@ -178,7 +181,7 @@ function formatTime(isoString: string | null): string {
                 </Link>
             </nav>
 
-            <!-- Right Actions: Sync Status, Refresh, Dark Mode Toggle, Mobile Menu -->
+            <!-- Right Actions: Sync Status, Reload data, Dark Mode Toggle, Mobile Menu -->
             <div class="flex shrink-0 items-center gap-1.5 sm:gap-2">
                 <!-- Live Sync Pill -->
                 <div
@@ -187,8 +190,8 @@ function formatTime(isoString: string | null): string {
                         !isTabVisible
                             ? 'Polling paused while browser tab is hidden'
                             : hasStaleSources
-                              ? 'One or more sources serving cached data'
-                              : 'Auto-refreshing every 60 seconds'
+                              ? 'One or more sources have not synced recently'
+                              : 'Page reloads stored data every 60 seconds'
                     "
                 >
                     <span class="flex size-2">
@@ -207,28 +210,31 @@ function formatTime(isoString: string | null): string {
                     </span>
                     <span class="font-mono whitespace-nowrap">
                         <template v-if="!isTabVisible">Paused</template>
-                        <template v-else-if="isRefreshing">Syncing...</template>
+                        <template v-else-if="isRefreshing">Loading…</template>
                         <template v-else-if="hasStaleSources"
                             >Stale • {{ countdown }}s</template
                         >
                         <template v-else>{{ countdown }}s</template>
                     </span>
                     <span class="hidden text-border xl:inline">|</span>
-                    <div class="hidden items-center gap-1 xl:flex">
+                    <div
+                        class="hidden items-center gap-1 xl:flex"
+                        :title="`Page data loaded ${formatTime(lastUpdated)}. Sources last synced ${formatTime(dataAsOf ?? null)}.`"
+                    >
                         <Clock class="size-3 text-muted-foreground/70" />
-                        <span class="font-mono whitespace-nowrap">{{
-                            formatTime(lastUpdated)
-                        }}</span>
+                        <span class="font-mono whitespace-nowrap"
+                            >Data as of {{ formatTime(dataAsOf ?? null) }}</span
+                        >
                     </div>
                 </div>
 
-                <!-- Manual Refresh Button -->
+                <!-- Reload data button -->
                 <Button
                     variant="outline"
                     size="sm"
                     class="h-8 cursor-pointer gap-1.5 border-border/80 bg-card px-2.5 text-xs font-medium text-foreground hover:bg-muted"
                     :disabled="isRefreshing"
-                    title="Refresh live disaster data"
+                    title="Reload the latest stored data. Does not contact GDACS or USGS."
                     @click="emit('refresh')"
                 >
                     <RefreshCw
@@ -237,7 +243,7 @@ function formatTime(isoString: string | null): string {
                             isRefreshing && 'animate-spin text-destructive',
                         ]"
                     />
-                    <span class="hidden sm:inline">Refresh</span>
+                    <span class="hidden sm:inline">Reload data</span>
                 </Button>
                 <!-- Dark Mode / Light Mode Toggle Button -->
                 <Button
@@ -309,11 +315,11 @@ function formatTime(isoString: string | null): string {
                         <template v-if="!isTabVisible"
                             >Auto-Sync Paused</template
                         >
-                        <template v-else-if="isRefreshing">Syncing...</template>
+                        <template v-else-if="isRefreshing">Loading…</template>
                         <template v-else>Auto-Sync: {{ countdown }}s</template>
                     </span>
                     <span class="font-mono"
-                        >Updated: {{ formatTime(lastUpdated) }}</span
+                        >Data as of: {{ formatTime(dataAsOf ?? null) }}</span
                     >
                 </div>
 

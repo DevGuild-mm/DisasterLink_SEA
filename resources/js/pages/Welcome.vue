@@ -87,13 +87,6 @@ const dataSources = [
         url: 'https://earthquake.usgs.gov',
     },
     {
-        name: 'NASA EONET',
-        org: 'NASA Earth Observatory',
-        coverage:
-            'Satellite tracking for wildfires, severe storms, thermal hotspots, and floods',
-        url: 'https://eonet.gsfc.nasa.gov',
-    },
-    {
         name: 'Open-Meteo',
         org: 'Open Meteorological Simulation API',
         coverage:
@@ -119,6 +112,7 @@ const dataSources = [
         <!-- Header Navigation & Live Refresh Status Bar -->
         <DisasterHeader
             :last-updated="data.generated_at"
+            :data-as-of="data.data_as_of"
             :is-refreshing="isRefreshing"
             :countdown="countdown"
             :is-tab-visible="isTabVisible"
@@ -205,7 +199,7 @@ const dataSources = [
                             >
                                 An open regional intelligence platform
                                 consolidating verified bulletins from GDACS,
-                                USGS, NASA EONET, and Open-Meteo across all 11
+                                USGS, and Open-Meteo across all 11
                                 ASEAN member nations. Track earthquakes, storms,
                                 floods, and atmospheric conditions with genuine
                                 scientific accuracy.

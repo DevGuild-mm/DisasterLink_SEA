@@ -28,7 +28,7 @@ const {
     <Head title="Data Freshness & Provenance – DisasterLinkSEA">
         <meta
             name="description"
-            content="Real-time telemetry health, latency metrics, and API provenance diagnostics for GDACS, USGS, NASA EONET, and Open-Meteo."
+            content="Real-time telemetry health, latency metrics, and API provenance diagnostics for GDACS, USGS, and Open-Meteo."
         />
     </Head>
 
@@ -37,6 +37,7 @@ const {
     >
         <DisasterHeader
             :last-updated="data.generated_at"
+            :data-as-of="data.data_as_of"
             :is-refreshing="isRefreshing"
             :countdown="countdown"
             :is-tab-visible="isTabVisible"

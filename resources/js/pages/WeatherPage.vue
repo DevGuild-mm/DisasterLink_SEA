@@ -38,6 +38,7 @@ const {
     >
         <DisasterHeader
             :last-updated="data.generated_at"
+            :data-as-of="data.data_as_of"
             :is-refreshing="isRefreshing"
             :countdown="countdown"
             :is-tab-visible="isTabVisible"

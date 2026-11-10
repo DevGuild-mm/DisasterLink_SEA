@@ -20,7 +20,6 @@ const props = defineProps<{
     sources?: {
         gdacs?: SourceFreshness;
         usgs?: SourceFreshness;
-        eonet?: SourceFreshness;
         weather?: SourceFreshness;
     } | null;
 }>();
@@ -60,23 +59,6 @@ const sourceCards = computed(() => {
             'https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson',
     };
 
-    const eonet: SourceFreshness = props.sources?.eonet ?? {
-        source: 'NASA EONET',
-        name: 'NASA Earth Observatory Natural Event Tracker (EONET v3)',
-        status: 'Unavailable',
-        freshness_status: 'Unavailable',
-        connection_status: 'Offline / Not Initialized',
-        last_successful_fetch: null,
-        latest_event_time: null,
-        cache_ttl_seconds: 900,
-        provider_update_frequency:
-            'Sub-daily satellite & partner agency updates',
-        frontend_poll_interval_seconds: 60,
-        is_fresh: false,
-        is_stale: false,
-        documentation_url: 'https://eonet.gsfc.nasa.gov/api/v3/events',
-    };
-
     const weather: SourceFreshness = props.sources?.weather ?? {
         source: 'Open-Meteo',
         name: 'Open-Meteo Weather Forecast API',
@@ -107,12 +89,6 @@ const sourceCards = computed(() => {
             role: 'Seismology Feed',
             meta: usgs,
             docsLabel: 'USGS GeoJSON Feed',
-        },
-        {
-            key: 'eonet',
-            role: 'Earth Observatory',
-            meta: eonet,
-            docsLabel: 'NASA EONET v3 API',
         },
         {
             key: 'weather',

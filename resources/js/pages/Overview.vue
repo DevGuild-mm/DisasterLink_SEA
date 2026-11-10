@@ -42,6 +42,7 @@ const {
     >
         <DisasterHeader
             :last-updated="data.generated_at"
+            :data-as-of="data.data_as_of"
             :is-refreshing="isRefreshing"
             :countdown="countdown"
             :is-tab-visible="isTabVisible"
@@ -104,8 +105,7 @@ const {
                         <p
                             class="mt-1 text-xs text-muted-foreground sm:text-sm"
                         >
-                            Calculated from real-time feeds across GDACS, USGS,
-                            and NASA EONET.
+                            Calculated from stored GDACS and USGS events.
                         </p>
                     </div>
 

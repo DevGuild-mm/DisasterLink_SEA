@@ -15,3 +15,6 @@ Schedule::command('disaster:sync usgs')->cron('4-59/5 * * * *')->withoutOverlapp
 
 // Alert recovery (HLD v1.3 §27.5): queue missed alert work and fail stuck sends.
 Schedule::command('alerts:dispatch')->everyFiveMinutes()->withoutOverlapping(10);
+
+// Capital weather (HLD §14): one batched Open-Meteo request every 30 minutes, staggered from the event syncs.
+Schedule::command('weather:refresh-capitals')->cron('12,42 * * * *')->withoutOverlapping(10);
