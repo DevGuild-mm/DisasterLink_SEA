@@ -14,7 +14,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property int $country_id
  * @property string $geojson
  */
-#[Fillable(['country_id', 'geojson', 'min_lat', 'max_lat', 'min_lng', 'max_lng', 'source', 'source_version', 'downloaded_at', 'license', 'attribution'])]
+#[Fillable(['country_id', 'geojson', 'min_lat', 'max_lat', 'min_lng', 'max_lng', 'source', 'source_version', 'downloaded_at', 'license', 'attribution', 'vertex_count', 'simplify_tolerance', 'imported_at'])]
 class CountryBoundary extends Model
 {
     /** @use HasFactory<CountryBoundaryFactory> */
@@ -35,6 +35,7 @@ class CountryBoundary extends Model
             'min_lng' => 'decimal:6',
             'max_lng' => 'decimal:6',
             'downloaded_at' => 'date',
+            'imported_at' => 'datetime',
         ];
     }
 

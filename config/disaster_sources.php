@@ -31,6 +31,17 @@ return [
     /* Hosts (and their subdomains) allowed in a stored source_url. */
     'allowed_url_hosts' => ['gdacs.org', 'usgs.gov'],
 
+    /*
+     * Country resolution (HLD §12). Boundaries come from database/seeders/data/asean_country_boundaries.json.
+     * An event within border_guard_km of another country's outline is left unresolved; one further than
+     * outside_region_km from every ASEAN outline is marked outside_region.
+     */
+    'country' => [
+        'boundaries_file' => database_path('seeders/data/asean_country_boundaries.json'),
+        'border_guard_km' => 2,
+        'outside_region_km' => 300,
+    ],
+
     'sources' => [
         'gdacs' => [
             'name' => 'GDACS',

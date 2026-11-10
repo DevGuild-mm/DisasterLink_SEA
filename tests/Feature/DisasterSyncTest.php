@@ -1,5 +1,7 @@
 <?php
 
+use App\Models\Country;
+use App\Models\CountryBoundary;
 use App\Models\DataSource;
 use App\Models\DisasterEvent;
 use App\Models\SyncRun;
@@ -692,4 +694,61 @@ test('Retry-After is capped by configuration and an invalid value falls back to 
     Sleep::assertSleptTimes(2);
     Sleep::assertSlept(fn (CarbonInterval $duration) => (int) $duration->totalMilliseconds === 5000, 1);
     Sleep::assertSlept(fn (CarbonInterval $duration) => (int) $duration->totalMilliseconds === 777, 1);
+});
+
+test('a synced GDACS event takes its country from the source ISO3', function () {
+    $phl = Country::factory()->create(['iso3' => 'PHL']);
+    Http::fake([GDACS_URL => Http::response(gdacsResponse([gdacsFeature()]))]);
+
+    app(DisasterSyncService::class)->sync('gdacs');
+
+    $event = DisasterEvent::first();
+
+    expect($event->country_id)->toBe($phl->id)
+        ->and($event->country_status)->toBe('resolved')
+        ->and($event->country_method)->toBe('source_code');
+});
+
+test('a USGS earthquake is resolved from coordinates, never from its place text', function () {
+    $idn = Country::factory()->create(['iso3' => 'IDN']);
+    CountryBoundary::factory()->create([
+        'country_id' => $idn->id,
+        'geojson' => json_encode(['type' => 'Polygon', 'coordinates' => [[[99, -3], [102, -3], [102, 0], [99, 0], [99, -3]]]]),
+        'min_lng' => 99, 'max_lng' => 102, 'min_lat' => -3, 'max_lat' => 0,
+    ]);
+    Http::fake([USGS_URL => Http::response(usgsResponse([
+        usgsFeature('us-inland'),
+        usgsFeature('us-sea', [], [103.0, -1.0, 10.0]),
+    ]))]);
+
+    app(DisasterSyncService::class)->sync('usgs');
+
+    $inland = DisasterEvent::where('external_id', 'us-inland')->first();
+    $sea = DisasterEvent::where('external_id', 'us-sea')->first();
+
+    expect($inland->country_id)->toBe($idn->id)
+        ->and($inland->country_method)->toBe('adm0_lookup')
+        ->and($sea->country_id)->toBeNull()
+        ->and($sea->country_status)->toBe('unresolved');
+});
+
+test('a resolved country is kept on later syncs, an unresolved one is retried when boundaries appear', function () {
+    $idn = Country::factory()->create(['iso3' => 'IDN']);
+    Http::fake([USGS_URL => Http::response(usgsResponse([usgsFeature('us-late')]))]);
+
+    app(DisasterSyncService::class)->sync('usgs');
+    expect(DisasterEvent::first()->country_status)->toBe('unresolved');
+
+    CountryBoundary::factory()->create([
+        'country_id' => $idn->id,
+        'geojson' => json_encode(['type' => 'Polygon', 'coordinates' => [[[99, -3], [102, -3], [102, 0], [99, 0], [99, -3]]]]),
+        'min_lng' => 99, 'max_lng' => 102, 'min_lat' => -3, 'max_lat' => 0,
+    ]);
+
+    app(DisasterSyncService::class)->sync('usgs');
+    expect(DisasterEvent::first()->country_id)->toBe($idn->id);
+
+    DisasterEvent::query()->update(['country_note' => 'kept']);
+    app(DisasterSyncService::class)->sync('usgs');
+    expect(DisasterEvent::first()->country_note)->toBe('kept');
 });

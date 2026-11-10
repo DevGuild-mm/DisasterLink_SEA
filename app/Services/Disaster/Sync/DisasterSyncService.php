@@ -27,7 +27,7 @@ class DisasterSyncService
      */
     private array $clients;
 
-    public function __construct(GdacsClient $gdacs, UsgsClient $usgs)
+    public function __construct(GdacsClient $gdacs, UsgsClient $usgs, private CountryResolver $countryResolver)
     {
         $this->clients = [
             $gdacs->key() => $gdacs,
@@ -138,22 +138,75 @@ class DisasterSyncService
             return ['created' => 0, 'updated' => 0];
         }
 
+        $this->countryResolver->flush();
+
         return DB::transaction(function () use ($source, $rows): array {
-            $existing = 0;
+            $before = [];
 
             foreach (array_chunk(array_keys($rows), self::CHUNK_SIZE) as $ids) {
-                $existing += DisasterEvent::query()
+                DisasterEvent::query()
                     ->where('source', $source)
                     ->whereIn('external_id', $ids)
-                    ->count();
+                    ->get(['external_id', 'latitude', 'longitude', 'country_status', 'source_meta'])
+                    ->each(function (DisasterEvent $event) use (&$before): void {
+                        $before[$event->external_id] = $event;
+                    });
             }
 
             foreach (array_chunk(array_values($rows), self::CHUNK_SIZE) as $chunk) {
                 DisasterEvent::query()->upsert($chunk, ['source', 'external_id'], NormalizedEvent::updatableColumns());
             }
 
+            $this->resolveCountries($source, $rows, $before);
+
+            $existing = count($before);
+
             return ['created' => count($rows) - $existing, 'updated' => $existing];
         });
+    }
+
+    /**
+     * Resolve the country (HLD §12) for new events, events whose coordinates or source country changed,
+     * and events still unresolved (so newly loaded boundaries are picked up). Other events keep their country.
+     *
+     * @param  array<string, array<string, mixed>>  $rows  upsert rows by external id
+     * @param  array<string, DisasterEvent>  $before  stored events before the upsert
+     */
+    private function resolveCountries(string $source, array $rows, array $before): void
+    {
+        foreach ($rows as $externalId => $row) {
+            $old = $before[$externalId] ?? null;
+            $meta = (array) json_decode((string) $row['source_meta'], true);
+            $iso3 = isset($meta['iso3']) ? (string) $meta['iso3'] : null;
+
+            if ($old !== null
+                && $old->country_status !== CountryResolution::UNRESOLVED
+                && $this->sameCoordinate($old->latitude, $row['latitude'])
+                && $this->sameCoordinate($old->longitude, $row['longitude'])
+                && ($old->source_meta['iso3'] ?? null) === $iso3) {
+                continue;
+            }
+
+            $resolution = $this->countryResolver->resolve(
+                $iso3,
+                $row['latitude'] !== null ? (float) $row['latitude'] : null,
+                $row['longitude'] !== null ? (float) $row['longitude'] : null,
+            );
+
+            DisasterEvent::query()
+                ->where('source', $source)
+                ->where('external_id', $externalId)
+                ->update($resolution->toColumns());
+        }
+    }
+
+    private function sameCoordinate(mixed $stored, mixed $incoming): bool
+    {
+        if ($stored === null || $incoming === null) {
+            return $stored === $incoming;
+        }
+
+        return abs((float) $stored - (float) $incoming) < 0.0000005;
     }
 
     private function fail(DataSource $source, SyncRun $run, Throwable $e, int $durationMs): SyncRun
