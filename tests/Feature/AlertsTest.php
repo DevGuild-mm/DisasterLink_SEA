@@ -615,3 +615,24 @@ test('a newly registered user gets no alert until the email is verified', functi
 
     expect(DisasterAlertLog::count())->toBe(0);
 });
+
+test('a user who changes their email in Settings gets no alert until the new address is verified', function () {
+    Bus::fake([SendDisasterAlertEmail::class]);
+    $user = User::factory()->create(['country_id' => $this->country->id, 'alerts_enabled' => true]);
+
+    $this->actingAs($user)->patch(route('profile.update'), [
+        'name' => $user->name,
+        'email' => 'changed@example.com',
+        'country_id' => $this->country->id,
+        'alerts_enabled' => '1',
+    ])->assertSessionHasNoErrors();
+
+    expect($user->refresh()->email_verified_at)->toBeNull()->and($user->alerts_enabled)->toBeTrue();
+
+    (new ProcessEventAlerts(pendingEvent($this->country)->id))->handle();
+    expect(DisasterAlertLog::count())->toBe(0);
+
+    $user->forceFill(['email_verified_at' => now()])->save();
+    (new ProcessEventAlerts(pendingEvent($this->country)->id))->handle();
+    expect(DisasterAlertLog::where('user_id', $user->id)->count())->toBe(1);
+});
