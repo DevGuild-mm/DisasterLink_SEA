@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Database\Factories\CountryFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -39,6 +40,17 @@ class Country extends Model
             'capital_lng' => 'decimal:6',
             'is_active' => 'boolean',
         ];
+    }
+
+    /**
+     * Countries a person may choose: the active ones.
+     *
+     * @param  Builder<Country>  $query
+     * @return Builder<Country>
+     */
+    public function scopeActive(Builder $query): Builder
+    {
+        return $query->where('is_active', true);
     }
 
     /**

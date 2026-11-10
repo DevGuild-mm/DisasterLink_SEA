@@ -17,6 +17,10 @@ class ProfileUpdateRequest extends FormRequest
      */
     public function rules(): array
     {
-        return $this->profileRules($this->user()->id);
+        return [
+            ...$this->profileRules($this->user()->id),
+            'country_id' => $this->countryRules(required: false, currentCountryId: $this->user()->country_id),
+            'alerts_enabled' => $this->alertsEnabledRules(),
+        ];
     }
 }

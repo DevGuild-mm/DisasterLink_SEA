@@ -541,3 +541,77 @@ test('alerts:dispatch is scheduled every five minutes without overlapping', func
         ->and($event->expression)->toBe('*/5 * * * *')
         ->and($event->withoutOverlapping)->toBeTrue();
 });
+
+/*
+ * Settings and registration feed the alert recipients (Phase 7.1).
+ */
+
+test('a user who switches alerts off in Settings is no longer a recipient', function () {
+    Bus::fake([SendDisasterAlertEmail::class]);
+    $user = User::factory()->create(['country_id' => $this->country->id]);
+    $stays = User::factory()->create(['country_id' => $this->country->id]);
+
+    $this->actingAs($user)->patch(route('profile.update'), ['name' => $user->name, 'email' => $user->email, 'alerts_enabled' => '0']);
+
+    $event = pendingEvent($this->country);
+    (new ProcessEventAlerts($event->id))->handle();
+
+    expect(DisasterAlertLog::pluck('user_id')->all())->toBe([$stays->id]);
+});
+
+test('switching alerts off after an alert is queued stops that email too', function () {
+    Mail::fake();
+    $user = User::factory()->create(['country_id' => $this->country->id]);
+    $event = pendingEvent($this->country);
+    $log = DisasterAlertLog::factory()->create(['user_id' => $user->id, 'disaster_event_id' => $event->id, 'status' => 'pending']);
+
+    $this->actingAs($user)->patch(route('profile.update'), ['name' => $user->name, 'email' => $user->email, 'alerts_enabled' => '0']);
+
+    (new SendDisasterAlertEmail($log->id))->handle();
+
+    Mail::assertNothingSent();
+    Mail::assertNothingQueued();
+});
+
+test('changing the country in Settings moves the user to the new country\'s alerts', function () {
+    Bus::fake([SendDisasterAlertEmail::class]);
+    $vietnam = Country::factory()->create(['iso2' => 'VN', 'iso3' => 'VNM', 'name' => 'Vietnam']);
+    $user = User::factory()->create(['country_id' => $this->country->id]);
+
+    $this->actingAs($user)->patch(route('profile.update'), ['name' => $user->name, 'email' => $user->email, 'country_id' => $vietnam->id]);
+
+    $indonesia = pendingEvent($this->country);
+    (new ProcessEventAlerts($indonesia->id))->handle();
+    expect(DisasterAlertLog::count())->toBe(0);
+
+    $vietnamEvent = pendingEvent($vietnam);
+    (new ProcessEventAlerts($vietnamEvent->id))->handle();
+    expect(DisasterAlertLog::pluck('user_id')->all())->toBe([$user->id]);
+});
+
+test('a user who registers after an event was processed is not back-filled', function () {
+    Bus::fake([SendDisasterAlertEmail::class]);
+    $event = pendingEvent($this->country);
+    (new ProcessEventAlerts($event->id))->handle();
+
+    $this->post(route('register.store'), [
+        'name' => 'Late User', 'email' => 'late@example.com', 'password' => 'password', 'password_confirmation' => 'password',
+        'country_id' => $this->country->id,
+    ])->assertSessionHasNoErrors();
+
+    expect(DisasterAlertLog::count())->toBe(0);
+});
+
+test('a newly registered user gets no alert until the email is verified', function () {
+    Bus::fake([SendDisasterAlertEmail::class]);
+
+    $this->post(route('register.store'), [
+        'name' => 'New User', 'email' => 'new@example.com', 'password' => 'password', 'password_confirmation' => 'password',
+        'country_id' => $this->country->id,
+    ])->assertSessionHasNoErrors();
+
+    $event = pendingEvent($this->country);
+    (new ProcessEventAlerts($event->id))->handle();
+
+    expect(DisasterAlertLog::count())->toBe(0);
+});

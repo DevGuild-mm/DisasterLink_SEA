@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\Country;
 use App\Models\User;
 
 test('registration ignores a role supplied in the payload', function () {
@@ -8,6 +9,7 @@ test('registration ignores a role supplied in the payload', function () {
         'email' => 'sneaky@example.com',
         'password' => 'password',
         'password_confirmation' => 'password',
+        'country_id' => Country::factory()->create()->id,
         'role' => 'admin',
     ]);
 
@@ -27,6 +29,25 @@ test('role cannot be mass assigned', function () {
     ]);
 
     expect($user->fresh()->role)->toBe('user');
+});
+
+test('country and alerts can be mass assigned, but the role still cannot', function () {
+    $country = Country::factory()->create();
+
+    $user = User::create([
+        'name' => 'Mass Assign Two',
+        'email' => 'mass2@example.com',
+        'password' => 'password',
+        'country_id' => $country->id,
+        'alerts_enabled' => false,
+        'role' => 'admin',
+        'email_verified_at' => now(),
+    ])->fresh();
+
+    expect($user->country_id)->toBe($country->id)
+        ->and($user->alerts_enabled)->toBeFalse()
+        ->and($user->role)->toBe('user')
+        ->and($user->email_verified_at)->toBeNull();
 });
 
 test('unverified admins are redirected away from admin routes', function () {

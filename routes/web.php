@@ -11,6 +11,7 @@ use App\Http\Controllers\DisasterIntelligenceController;
 use App\Http\Controllers\DisasterReportController;
 use App\Http\Controllers\EmergencyCoordinationController;
 use App\Http\Controllers\PreparednessController;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', [DisasterDashboardController::class, 'home'])->name('home');
@@ -70,7 +71,8 @@ Route::middleware(['auth', 'verified', 'admin'])->prefix('admin')->name('admin.'
 });
 
 Route::middleware(['auth', 'verified'])->group(function () {
-    Route::inertia('dashboard', 'Dashboard')->name('dashboard');
+    // The starter dashboard page is gone; old links land on the Welcome page (admins on /admin).
+    Route::get('dashboard', fn (Request $request) => redirect($request->user()->isAdmin() ? '/admin' : '/'))->name('dashboard');
 });
 
 require __DIR__.'/settings.php';
