@@ -5,7 +5,6 @@ import {
     AlertTriangle,
     ArrowRight,
     CloudSun,
-    Database,
     ExternalLink,
     Globe,
     RefreshCw,
@@ -22,7 +21,30 @@ import type { DashboardData } from '@/types/disaster';
 
 const props = defineProps<{
     initialDashboardData?: DashboardData | null;
+    guidesPreview?: Array<{
+        id: number;
+        title: string;
+        summary: string;
+        hazard_type: string;
+    }>;
+    contactsPreview?: Array<{
+        id: number;
+        agency_name: string;
+        category: string;
+        phone: string;
+        phone_link: string;
+    }>;
+    contactsCountry?: { iso2: string; name: string } | null;
+    countries?: Array<{ id: number; iso2: string; name: string }>;
 }>();
+
+function chooseContactsCountry(event: Event) {
+    const value = (event.target as HTMLSelectElement).value;
+
+    if (value) {
+        router.get('/preparedness#contacts', { country: value });
+    }
+}
 
 const {
     data,
@@ -630,17 +652,117 @@ const dataSources = [
                         </Card>
                     </div>
 
-                    <div class="mt-8 text-center">
-                        <Link
-                            href="/freshness"
-                            class="inline-flex items-center gap-1.5 text-xs font-semibold text-foreground hover:text-destructive hover:underline"
-                        >
-                            <Database class="size-3.5" />
-                            <span
-                                >View Real-Time API Health & Freshness
-                                Diagnostics &rarr;</span
+                </div>
+            </section>
+
+            <!-- Be prepared: safety guides and emergency contacts (HLD §8.1) -->
+            <section class="border-t border-border bg-muted/20 py-10">
+                <div
+                    class="mx-auto grid max-w-7xl gap-8 px-4 sm:px-6 lg:grid-cols-2 lg:px-8"
+                >
+                    <div>
+                        <h2 class="text-xl font-bold">Safety guides</h2>
+                        <p class="mt-1 text-sm text-muted-foreground">
+                            What to do before, during and after a disaster.
+                        </p>
+
+                        <ul v-if="guidesPreview?.length" class="mt-4 space-y-3">
+                            <li
+                                v-for="guide in guidesPreview"
+                                :key="guide.id"
+                                class="rounded-xl border border-border bg-card p-4"
                             >
-                        </Link>
+                                <p
+                                    class="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase"
+                                >
+                                    {{ guide.hazard_type }}
+                                </p>
+                                <p class="font-medium">{{ guide.title }}</p>
+                                <p class="text-sm text-muted-foreground">
+                                    {{ guide.summary }}
+                                </p>
+                            </li>
+                        </ul>
+                        <p v-else class="mt-4 text-sm text-muted-foreground">
+                            No safety guides have been published yet.
+                        </p>
+
+                        <Link
+                            href="/preparedness#guides"
+                            class="mt-4 inline-block text-sm font-semibold hover:underline"
+                            >View all safety guides &rarr;</Link
+                        >
+                    </div>
+
+                    <div>
+                        <h2 class="text-xl font-bold">Emergency contacts</h2>
+                        <p class="mt-1 text-sm text-muted-foreground">
+                            <template v-if="contactsCountry"
+                                >Key numbers for
+                                {{ contactsCountry.name }}.</template
+                            >
+                            <template v-else
+                                >Choose a country to see its key
+                                numbers.</template
+                            >
+                        </p>
+
+                        <label
+                            v-if="!contactsCountry"
+                            class="mt-4 flex flex-col gap-1 text-xs font-medium"
+                        >
+                            Country
+                            <select
+                                class="h-9 rounded-md border border-border bg-card px-3 text-sm"
+                                @change="chooseContactsCountry"
+                            >
+                                <option value="">Choose a country</option>
+                                <option
+                                    v-for="country in countries"
+                                    :key="country.id"
+                                    :value="country.iso2"
+                                >
+                                    {{ country.name }}
+                                </option>
+                            </select>
+                        </label>
+
+                        <ul
+                            v-else-if="contactsPreview?.length"
+                            class="mt-4 space-y-3"
+                        >
+                            <li
+                                v-for="contact in contactsPreview"
+                                :key="contact.id"
+                                class="rounded-xl border border-border bg-card p-4"
+                            >
+                                <p class="font-medium">
+                                    {{ contact.agency_name }}
+                                </p>
+                                <a
+                                    :href="contact.phone_link"
+                                    class="text-lg font-bold text-primary"
+                                    >{{ contact.phone }}</a
+                                >
+                            </li>
+                        </ul>
+                        <p
+                            v-else-if="contactsCountry"
+                            class="mt-4 text-sm text-muted-foreground"
+                        >
+                            No emergency contacts have been published for
+                            {{ contactsCountry.name }} yet.
+                        </p>
+
+                        <Link
+                            :href="
+                                contactsCountry
+                                    ? `/preparedness?country=${contactsCountry.iso2}#contacts`
+                                    : '/preparedness#contacts'
+                            "
+                            class="mt-4 inline-block text-sm font-semibold hover:underline"
+                            >View all emergency contacts &rarr;</Link
+                        >
                     </div>
                 </div>
             </section>

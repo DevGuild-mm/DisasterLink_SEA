@@ -5,6 +5,7 @@ namespace App\Services\Disaster\Sync;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Throwable;
 
 /**
@@ -39,6 +40,8 @@ class GdacsClient extends SourceClient
         // Orange/Red are the events that can trigger alerts, so a failure here fails the run.
         [$features, $status] = $this->fetchLevel('orange;red', $base, 3);
 
+        $warning = null;
+
         // Green events only feed the Green -> Orange escalation rule, so a failure here is not fatal.
         try {
             [$green] = $this->fetchLevel('green', $base, (int) $this->config('max_green_pages', 8));
@@ -48,6 +51,7 @@ class GdacsClient extends SourceClient
             }
         } catch (SourceFetchException $e) {
             Log::warning('GDACS Green events could not be fetched, continuing with Orange/Red: '.$e->getMessage());
+            $warning = 'Green events could not be fetched ('.Str::limit($e->getMessage(), 200, '').'). Orange/Red events were saved; a Green to Orange escalation may be recorded one cycle late.';
         }
 
         $events = [];
@@ -65,7 +69,7 @@ class GdacsClient extends SourceClient
             $events[] = $event;
         }
 
-        return new FetchResult($events, count($features), $skipped, $status);
+        return new FetchResult($events, count($features), $skipped, $status, $warning);
     }
 
     /**

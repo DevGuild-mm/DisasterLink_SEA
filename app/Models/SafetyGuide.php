@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Str;
 
 /**
  * Admin-managed safety guide. A null country_id means the guide applies to all countries.
@@ -16,9 +17,12 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property string $slug
  * @property bool $is_published
  */
-#[Fillable(['title', 'slug', 'hazard_type', 'summary', 'content', 'country_id', 'is_published', 'sort_order'])]
+#[Fillable(['title', 'slug', 'hazard_type', 'summary', 'content', 'country_id', 'is_published', 'sort_order', 'created_by', 'updated_by'])]
 class SafetyGuide extends Model
 {
+    /** Hazard groups shown on the public page (HLD §8.3). */
+    public const HAZARD_TYPES = ['earthquake', 'cyclone', 'flood', 'volcano', 'wildfire', 'drought', 'general'];
+
     /** @use HasFactory<SafetyGuideFactory> */
     use HasFactory;
 
@@ -30,6 +34,15 @@ class SafetyGuide extends Model
         return [
             'is_published' => 'boolean',
         ];
+    }
+
+    /**
+     * The guide body as safe HTML. Raw HTML in the Markdown is dropped and unsafe links (javascript:, data:) are
+     * not allowed, so the result can be shown with v-html.
+     */
+    public function contentHtml(): string
+    {
+        return (string) Str::markdown($this->content, ['html_input' => 'strip', 'allow_unsafe_links' => false]);
     }
 
     /**

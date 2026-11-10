@@ -84,18 +84,15 @@ test('5. weather page renders all ASEAN capital city observations', function () 
     );
 });
 
-test('6. data freshness page renders provider connectivity statuses', function () {
+test('6. the public data freshness page is gone; its diagnostics are admin-only', function () {
     fakeFullTelemetry();
 
-    $response = $this->get('/freshness');
+    $this->get('/freshness')->assertNotFound();
 
-    $response->assertOk();
-    $response->assertInertia(fn ($page) => $page
-        ->component('FreshnessPage')
-        ->has('initialDashboardData.sources.gdacs')
-        ->has('initialDashboardData.sources.usgs')
-        ->has('initialDashboardData.sources.weather')
-    );
+    // The public payload still carries the plain source status the pages show.
+    $this->getJson('/api/disaster-dashboard')
+        ->assertOk()
+        ->assertJsonStructure(['sources' => ['gdacs', 'usgs', 'weather']]);
 });
 
 test('7. disaster report input sanitization strips XSS and malicious HTML tags', function () {

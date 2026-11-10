@@ -94,7 +94,7 @@ test('a source whose last success is old is shown as Stale, never Live', functio
 test('all web pages and the JSON telemetry API return HTTP 200 without contacting any provider', function () {
     seedTelemetry();
 
-    foreach (['/', '/overview', '/map', '/events', '/weather', '/freshness'] as $pageRoute) {
+    foreach (['/', '/overview', '/map', '/events', '/weather', '/preparedness'] as $pageRoute) {
         $this->get($pageRoute)->assertOk();
     }
 

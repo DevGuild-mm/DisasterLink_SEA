@@ -5,6 +5,7 @@ namespace App\Services\Disaster\Dashboard;
 use App\Models\CapitalWeather;
 use App\Models\DataSource;
 use App\Models\DisasterEvent;
+use App\Models\SyncRun;
 use Illuminate\Support\Carbon;
 
 /**
@@ -18,6 +19,121 @@ class SourceHealthService
         'usgs' => ['USGS', 'United States Geological Survey (Earthquake Hazards Program)', 'Every 5 minutes (scheduled sync)', 'https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson'],
         'open_meteo' => ['Open-Meteo', 'Open-Meteo Weather Forecast API', 'Every 30 minutes (scheduled sync)', 'https://open-meteo.com/en/docs'],
     ];
+
+    /** Delayed and Stale thresholds in minutes (HLD §18.2). */
+    private const THRESHOLDS = [
+        'usgs' => [10, 30],
+        'gdacs' => [30, 60],
+        'open_meteo' => [60, 180],
+    ];
+
+    /** A queued run older than this many seconds suggests that no queue worker is running (HLD §28.8). */
+    private const WORKER_WARNING_SECONDS = 120;
+
+    /** A running row older than the lock TTL plus a margin is shown as abandoned without writing (HLD §28.10). */
+    private const ABANDONED_SECONDS = 360;
+
+    /**
+     * Admin Data Freshness: one card per source with the HLD §18.2 status, the latest run, and the last 20 runs.
+     *
+     * @return array{sources: array<int, array<string, mixed>>, runs: array<int, array<string, mixed>>}
+     */
+    public function adminSnapshot(): array
+    {
+        $now = Carbon::now();
+        $rows = DataSource::query()->get()->keyBy('key');
+        $cards = [];
+
+        foreach (self::THRESHOLDS as $key => [$delayed, $stale]) {
+            $row = $rows->get($key);
+            $latest = SyncRun::query()->where('source_key', $key)->latest('id')->first();
+            $success = $row?->last_success_at;
+            $age = $success === null ? null : $success->diffInMinutes($now, true);
+
+            $status = match (true) {
+                $row === null || $row->last_attempt_at === null => 'Never Synced',
+                $row->last_status === 'failed' => $row->consecutive_failures >= 3 ? 'Failed (repeated)' : 'Failed',
+                $success === null || $age > $stale => 'Stale',
+                $age > $delayed => 'Delayed',
+                default => 'Healthy',
+            };
+
+            $card = [
+                'key' => $key,
+                'name' => $row?->name ?? $key,
+                'status' => $status,
+                'interval_minutes' => $row?->interval_minutes,
+                'last_attempt_at' => $row?->last_attempt_at?->toIso8601String(),
+                'last_success_at' => $success?->toIso8601String(),
+                'next_run_estimate_at' => $row?->last_attempt_at?->copy()->addMinutes((int) $row->interval_minutes)->toIso8601String(),
+                'last_fetched_count' => $row?->last_fetched_count,
+                'last_processed_count' => $row?->last_processed_count,
+                'last_run_returned_zero' => $row !== null && $row->last_fetched_count === 0,
+                'no_events_24h' => $key !== 'open_meteo' && $this->zeroForADay($key, $now),
+                'last_error' => $row?->last_error,
+                'consecutive_failures' => (int) ($row?->consecutive_failures ?? 0),
+                'last_duration_ms' => $latest?->duration_ms,
+                'latest_run' => $latest === null ? null : $this->describeRun($latest, $now),
+            ];
+
+            if ($key === 'open_meteo') {
+                $card['latest_observation_at'] = CapitalWeather::query()->max('observed_at') === null
+                    ? null : Carbon::parse(CapitalWeather::query()->max('observed_at'))->toIso8601String();
+                $card['capitals_with_data'] = CapitalWeather::query()->count();
+                $card['capitals_total'] = 11;
+            }
+
+            $cards[] = $card;
+        }
+
+        $runs = SyncRun::query()->latest('id')->limit(20)->get()->map(fn (SyncRun $run): array => $this->describeRun($run, $now))->all();
+
+        return ['sources' => $cards, 'runs' => $runs];
+    }
+
+    /**
+     * Every successful run of the source in the last 24 h returned nothing (and there was at least one).
+     */
+    private function zeroForADay(string $key, Carbon $now): bool
+    {
+        $recent = SyncRun::query()->where('source_key', $key)->where('status', 'success')->where('finished_at', '>=', $now->copy()->subDay());
+
+        return $recent->count() > 0 && (clone $recent)->where('fetched_count', '>', 0)->doesntExist();
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function describeRun(SyncRun $run, Carbon $now): array
+    {
+        $state = match (true) {
+            $run->status === 'success' && $run->warning_message !== null => 'success_with_warnings',
+            $run->status === 'running' && $run->started_at !== null && $run->started_at->diffInSeconds($now, true) > self::ABANDONED_SECONDS => 'abandoned',
+            default => $run->status,
+        };
+
+        return [
+            'id' => $run->id,
+            'source_key' => $run->source_key,
+            'state' => $state,
+            'status' => $run->status,
+            'trigger' => $run->trigger,
+            'request_uuid' => $run->request_uuid,
+            'requested_by' => $run->requestedBy?->name,
+            'queued_at' => $run->queued_at?->toIso8601String(),
+            'started_at' => $run->started_at?->toIso8601String(),
+            'finished_at' => $run->finished_at?->toIso8601String(),
+            'duration_ms' => $run->duration_ms,
+            'fetched_count' => $run->fetched_count,
+            'created_count' => $run->created_count,
+            'updated_count' => $run->updated_count,
+            'skipped_count' => $run->skipped_count,
+            'error_message' => $run->error_message,
+            'warning_message' => $run->warning_message,
+            'worker_warning' => $run->status === 'queued' && $run->queued_at !== null
+                && $run->queued_at->diffInSeconds($now, true) > self::WORKER_WARNING_SECONDS,
+        ];
+    }
 
     /**
      * Keyed gdacs, usgs and weather (the keys the front end already uses).

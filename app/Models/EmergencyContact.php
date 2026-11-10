@@ -19,6 +19,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 #[Fillable(['country_id', 'agency_name', 'category', 'phone', 'alt_phone', 'website', 'notes', 'is_published', 'sort_order'])]
 class EmergencyContact extends Model
 {
+    public const CATEGORIES = ['police', 'fire', 'ambulance', 'disaster_agency', 'general'];
+
     /** @use HasFactory<EmergencyContactFactory> */
     use HasFactory;
 
@@ -30,6 +32,14 @@ class EmergencyContact extends Model
         return [
             'is_published' => 'boolean',
         ];
+    }
+
+    /**
+     * A `tel:` link that holds only digits and the characters a dialler accepts.
+     */
+    public static function telLink(string $phone): string
+    {
+        return 'tel:'.preg_replace('/[^0-9+*#]/', '', $phone);
     }
 
     /**

@@ -10,7 +10,7 @@
 | Item | Value |
 |---|---|
 | Document | High-Level Design — DisasterLink SEA |
-| Version | **1.5** (implementation record of Phase 5; no new requirements) |
+| Version | **1.6** (implementation record of Phase 6; no new requirements) |
 | Revision date | 10 November 2026 |
 | Path | `docs/DisasterLink_SEA_HLD.md` (canonical HLD) |
 | Related document | `docs/ASEAN_LOCATION_DATA_RESEARCH.md`. It researched **State/Province (ADM1)** data for the earlier v1.1 design. In v1.2 it is a **reference only** (licensing approach, geoBoundaries findings). The State/Province dataset it recommends is **not** part of the MVP. |
@@ -30,8 +30,9 @@
 | **1.3** | **10 Nov 2026** | **Local-first MVP and simplifications** (§27, Proposed, pending team approval). Main changes:<br>• **Production deployment deferred** (Oracle Cloud, Resend, MySQL server, Supervisor, TLS, backups) to a later phase. The MVP must work end to end on a developer machine.<br>• **Recency counts from escalation:** an event that becomes Orange/Red after it started can still alert.<br>• **USGS may take its country from a linked GDACS record** (OQ-2 = yes).<br>• **Simpler alert reliability:** no event leases; one `alerts:dispatch` command; delivery quota counted from the database.<br>• **Heartbeats and `Cache::flexible` dropped.**<br>• **ADM0 provider proposed:** Natural Earth Admin-0 (public domain).<br>• Revised 7-day local roadmap. |
 | **1.4** | **10 Nov 2026** | **Cache layer and the three data operations** (§28, approved requirements; no code changed). Main changes:<br>• **Target flow documented:** GDACS/USGS → `DisasterSyncService` ← Scheduler / Admin manual sync → MySQL → Cache → `DashboardQueryService` → UI.<br>• **Single cache strategy:** `Cache::remember` cache-aside on the `database` driver, with a generation counter; `Cache::flexible` text removed.<br>• **Invalidation only after commit and only on relevant change;** failed and no-change syncs leave the cache alone; source health and `data_as_of` are read live.<br>• **Admin manual sync** is a queued, unique, throttled job with queued / running / success / failed states and a per-source result.<br>• **Public "Reload data" never calls GDACS/USGS;** admin button is "Sync from sources".<br>• **Reliability values calculated:** run deadline, lock TTL, `withoutOverlapping(10)`, job timeout, queue `retry_after`; abandoned-run sweep.<br>• Phase 2 follow-ups listed with their true state; real Phase 2 component names recorded.<br>• **Clarified:** four statuses plus a nullable `warning_message` ("Success with warnings" is a display state); atomic claim of queued rows; a job that cannot get the lock exits; `sync_runs` is extended (with `request_uuid`) instead of a `sync_requests` table. |
 | **1.5** | **10 Nov 2026** | **Phase 5 implementation record (§29).** Phase 5 (pages served from MySQL through a generation-keyed cache) is built, so statements that the public pages call GDACS, USGS, EONET or Open-Meteo, that `DashboardCache` / `DashboardQueryService` are future work, and that v1.4 changed no code, are marked as historical with a pointer to §29. §29 lists every difference between the design (§28) and the code, including: the public event id format, 404 for unknown events, the removed weather fields, the weather refresh schedule and lock, the 7-day window, and one decided design question (UD-6: a stale dashboard payload may be served for up to 300 s if cache invalidation fails). Earlier text is kept; it is annotated, not rewritten. |
+| **1.6** | **10 Nov 2026** | **Phase 6 implementation record (§30).** Guides and contacts (public pages, admin CRUD, Welcome previews), the admin dashboard, the admin "Sync from sources" job (`RunSourceSync`), the `sync_runs` migration, the abandoned-run sweep, the `warning_message` for a Green-level GDACS failure, and the admin Data Freshness tab are built. The public `/freshness` page is removed. Safety Guides and Emergency Contacts are one public page, `/preparedness` (§30.5). §28 items marked [Future work] for Phase 6 are annotated. §30 lists every difference from the design and what is **not** built (scheduler heartbeat banner, content seeding, extra Overview counts, country review list, guide caching). |
 
-v1.2 **supersedes** the State/Province design of v1.1. Where v1.1 and v1.2 differ, v1.2 applies. **Where v1.3 (§27) differs from earlier sections, §27 applies. Where v1.4 (§28) differs from any earlier section, §28 applies. Where §29 (v1.5) records how Phase 5 was actually built, §29 describes the implemented state and lists every difference from §28.**
+v1.2 **supersedes** the State/Province design of v1.1. Where v1.1 and v1.2 differ, v1.2 applies. **Where v1.3 (§27) differs from earlier sections, §27 applies. Where v1.4 (§28) differs from any earlier section, §28 applies. Where §29 (v1.5) and §30 (v1.6) record how Phase 5 and Phase 6 were actually built, they describe the implemented state and list every difference from §28.**
 
 ### 1.2 Labels
 
@@ -247,7 +248,7 @@ flowchart LR
 | `/dashboard` | Starter placeholder | `auth`, `verified` | Redirect: admin → `/admin`, user → `/` |
 | `/settings/*` | Profile / Security / Appearance | `auth` | Profile gains **Country** and the alert-email toggle |
 | `/login`, `/register` | `AuthSimpleLayout` | Guest | Themed, with a Login/Register toggle and a **Country** select |
-| — | — | — | **New:** `/safety-guides` and `/emergency-contacts` detail pages (public) |
+| — | — | — | **New:** `/safety-guides` and `/emergency-contacts` detail pages (public) *(v1.6: replaced by one page, `/preparedness`; the old URLs redirect; §30.5)* |
 | — | — | — | **New:** `/admin` (tabs) |
 
 ---
@@ -290,7 +291,7 @@ flowchart LR
 | `CountryAlertsQuery` | Recent eligible events for the signed-in user's country (Welcome page) | Service | Must |
 | `SourceHealthService` | Healthy / Delayed / Stale / Failed / Never Synced | Service | Must |
 | Admin controllers | Overview, Guide CRUD, Contact CRUD, Data Freshness, Refresh now | HTTP | Must |
-| Public content controllers | `/safety-guides`, `/emergency-contacts` | HTTP | Must |
+| Public content controllers | `/preparedness` (`PreparednessController`; `/safety-guides` and `/emergency-contacts` redirect to it) | HTTP | Must |
 
 ### 6.3 API and route design
 
@@ -298,14 +299,15 @@ flowchart LR
 |---|---|---|---|
 | `GET /` `/overview` `/map` `/events` `/weather` | Existing Inertia pages | Public | Props from `DashboardQueryService` (cache → MySQL) |
 | `GET /api/disaster-dashboard` | Dashboard JSON for 60 s polling | Public, `throttle:60,1` | `?refresh=1` (**"Reload data"**, §28.4) **rebuilds the dashboard from MySQL and repopulates the cache** (rate-limited per IP, `throttle:6,1`, 10 s coalescing). It never calls external APIs. |
-| `GET /safety-guides` | Safety Guides detail page | Public | `?country={ISO2}` filter (country-specific + all-country guides) |
-| `GET /emergency-contacts` | Emergency Contacts detail page | Public | `?country={ISO2}` filter |
+| `GET /preparedness` | **[v1.6]** The public "Be Prepared" page: Emergency Contacts and Safety Guides together (§8.3, §30.5) | Public | Two independent filters in the URL: `?country={ISO2}` (contacts) and `?hazard={type}` (guides) |
+| `GET /safety-guides` | *(Earlier design: Safety Guides detail page.)* **v1.6:** permanent redirect (301) to `/preparedness#guides` | Public | Keeps `?country` only |
+| `GET /emergency-contacts` | *(Earlier design: Emergency Contacts detail page.)* **v1.6:** permanent redirect (301) to `/preparedness#contacts` | Public | Keeps `?country` only |
 | `GET /api/locations/countries` | Country select options | Public | Cached 24 h |
 | `GET /api/me/country-alerts` (or an Inertia prop on `/`) | Recent eligible events for the user's country | `auth` | Cached per country, 60 s |
 | `POST /register`, `PUT /settings/profile` | Fortify registration / profile with `country_id` and `alerts_enabled` | Guest / `auth` | Validated server-side |
 | `GET /admin` | Admin Dashboard (tabs) | `auth`, `verified`, `admin` | `?tab=overview\|guides\|contacts\|freshness` |
 | `GET /admin/stats` | Overview counts | admin | |
-| `Route::resource('admin/safety-guides')`, `Route::resource('admin/emergency-contacts')` | CRUD | admin | Form Requests + gate |
+| `Route::resource('admin/safety-guides')`, `Route::resource('admin/emergency-contacts')` | CRUD | admin | Form Requests + gate *(v1.6: implemented as explicit `POST`, `PUT` and `DELETE` routes under `/admin`; listing, viewing and editing happen in the Safety Guides and Emergency Contacts tabs of the `/admin` page, which is separate from the public page)* |
 | `GET /admin/data-sources` | Freshness and source health | admin | Reads `data_sources` and `sync_runs` live (not cached) |
 | `POST /admin/data-sources/refresh` | **Sync from sources** (v1.4, §28.8): `source = gdacs\|usgs\|all`; queues `RunSourceSync`, returns 202 with a per-source state | admin, `throttle:3,1` | Same `DisasterSyncService` and `sync:{source}` lock as the scheduler; result in `sync_runs` |
 
@@ -358,8 +360,8 @@ The **Weather UI is unchanged.** Don't redesign unrelated sections.
 | Hero, CTAs, `RegionalOverview`, features, sources | [Exists] | Keep; data from the MySQL-backed dashboard | Must |
 | Login / Register buttons | [Missing] | Add to `DisasterHeader` for guests (desktop + mobile) | Must |
 | **Country alerts area** (`CountryAlerts.vue`) | [Missing] | Guests: registration promotion. Signed-in: recent alerts for their country (§8.2). | Must |
-| **Safety Guides preview** | [Missing] | Up to 3 published guides (all-country, or the signed-in user's country) with "View all safety guides →" `/safety-guides` | Must |
-| **Emergency Contacts preview** | [Missing] | Up to 3 key contacts for a selected country (default: the signed-in user's country, otherwise a country chooser) with "View all emergency contacts →" `/emergency-contacts` | Must |
+| **Safety Guides preview** | [Missing] | Up to 3 published guides (all-country, or the signed-in user's country) with "View all safety guides →" `/preparedness#guides` *(v1.6)* | Must |
+| **Emergency Contacts preview** | [Missing] | Up to 3 key contacts for a selected country (default: the signed-in user's country, otherwise a country chooser) with "View all emergency contacts →" `/preparedness?country={ISO2}#contacts`, or `/preparedness#contacts` without a country *(v1.6)* | Must |
 | Weather | [Exists] | **Unchanged**; reads the 11-capital snapshot | Must |
 | "Data Freshness" nav links + `/freshness` route | [Exists] | **Removed** from the public UI | Must |
 | "Last updated HH:MM" next to the map/feed | [Missing] | Backend `data_as_of` timestamp only, not diagnostics | Should |
@@ -377,12 +379,14 @@ The **Weather UI is unchanged.** Don't redesign unrelated sections.
 
 ### 8.3 Safety Guides and Emergency Contacts pages [Approved structure]
 
+> **v1.6 (§30.5):** the two pages below were built as **one public page, `/preparedness`**, with an Emergency Contacts section and a Safety Guides section and two independent filters. The table keeps the original design; where it differs, §30.5 applies. In particular, the guides are filtered by **disaster type only**, not by country.
+
 | Page | Content | Filter |
 |---|---|---|
 | `/safety-guides` | Published guides grouped by hazard type (earthquake, cyclone, flood, volcano, wildfire, general). Each guide is shown as an expandable card with sanitised Markdown content. | **Country** select (`?country=TH`): shows guides for that country **plus** all-country guides (`country_id IS NULL`). No State/Province filter. |
 | `/emergency-contacts` | Published contacts as a table/cards: agency, category, phone (`tel:` link), alternative phone, website (validated https), notes | **Country** select. Default: the signed-in user's country, otherwise "choose a country". No State/Province filter. |
 
-Both pages reuse `DisasterHeader` / `DisasterFooter` and the existing card and table styles. A header nav item "Be Prepared" links to `/safety-guides`, with Emergency Contacts beside it.
+Both pages reuse `DisasterHeader` / `DisasterFooter` and the existing card and table styles. A header nav item "Be Prepared" links to `/safety-guides`, with Emergency Contacts beside it. *(v1.6: the header has one "Be Prepared" item that links to `/preparedness`; there is no separate Emergency Contacts item.)*
 
 ### 8.4 Login and Registration
 
@@ -809,7 +813,7 @@ An event is **alert-eligible** when **all** of these hold:
   - a **link to the original source event**,
   - a link to the event on DisasterLink SEA.
 - **Fixed statement:** "This alert is sent because the event was reported in {Country}, your registered country. It does not mean your city or area is directly affected. Please check the event location and official sources, and follow local authorities."
-- Links to `/emergency-contacts?country={ISO2}` and `/safety-guides`.
+- Links to `/emergency-contacts?country={ISO2}` and `/safety-guides`. *(v1.6: the links are `/preparedness?country={ISO2}#contacts` and `/preparedness#guides`. The old URLs in emails already sent still work through the 301 redirects, §30.5.)*
 - **Footer:** "Manage alert emails in your account settings" (Must). A signed one-click unsubscribe link and a `List-Unsubscribe` header are Should Have.
 - The email **must not** claim that the user's city, town or province is affected.
 
@@ -2015,10 +2019,10 @@ Rules this diagram enforces:
 | `disaster:sync {gdacs\|usgs\|all}` (`SyncDisasterEvents`) | Thin CLI entry for the scheduler; calls `DisasterSyncService` | [Exists] |
 | `DisasterSyncService` | Lock, `sync_runs` / `data_sources` bookkeeping, fetch via a client, transactional upsert, change detection, post-commit cache invalidation | [Exists], change detection / deadline / sweep are [Future work] |
 | `GdacsClient`, `UsgsClient` (`SourceClient`) | Fetch + validate + normalise only: TLS on, no cache, no `uniqid` | [Exists] |
-| `RunSourceSync` (queued job, `ShouldBeUnique`) | Calls `DisasterSyncService` for one source for an admin request | [Future work] (Phase 6) |
+| `RunSourceSync` (queued job, `ShouldBeUnique`) | Calls `DisasterSyncService` for one source for an admin request | [Future work at v1.4] **[Implemented, Phase 6, §30]** |
 | `DashboardCache` | Keys, TTLs, generation counter, rebuild lock, reload coalescing, invalidation | [Future work at v1.4] **[Implemented, Phase 5, §29]** |
 | `DashboardQueryService` | Builds the dashboard payload from MySQL; cache-aside; merges live source status | [Future work at v1.4] **[Implemented, Phase 5, §29]** |
-| `SourceHealthService` | Status and `data_as_of` from `data_sources`, always read live | [Future work] (Phase 6) |
+| `SourceHealthService` | Status and `data_as_of` from `data_sources`, always read live | [Future work at v1.4] **[Implemented: public part in Phase 5, admin part in Phase 6, §29/§30]** |
 
 ### 28.4 The three operations [Approved]
 
@@ -2122,7 +2126,7 @@ Non-admins get 403 (guests: redirect/401). Nothing is queued for them.
 
 There are exactly four statuses. **`success_with_warnings` is not a status:** health logic, `data_sources.last_status` and every "was it successful" query test `status = 'success'`, and a partial run did persist its Orange/Red data and updates `last_success_at` normally. "Success with warnings" is a display state: `status = 'success'` **and** `warning_message IS NOT NULL`.
 
-**`sync_runs` extension [Approved; Future work: one Phase 6 migration; none made by v1.4].** Option A (extend `sync_runs`) is chosen over a separate `sync_requests` table (UD-3 decided, §28.14):
+**`sync_runs` extension [Approved; implemented in Phase 6 as one migration, §30; none was made by v1.4].** Option A (extend `sync_runs`) is chosen over a separate `sync_requests` table (UD-3 decided, §28.14):
 
 | Column | Change | Purpose |
 |---|---|---|
@@ -2187,7 +2191,7 @@ The scheduler path has no queued row: `DisasterSyncService::sync()` returns `nul
 | GDACS theoretical maximum without a deadline | 11 × 105 ≈ **1155 s** | why a total limit is required |
 | USGS | 1 request, ≤ 105 s | |
 
-**Total sync time limit [Exists] (v1.4 follow-up).** `DisasterSyncService` gives each client a `SyncDeadline` of **150 s** (`disaster_sources.sync.deadline_seconds`) at the start of the fetch phase and removes it afterwards. **No request starts after the deadline, and a retry starts only if its wait is shorter than the time left**; each attempt's timeout is also capped by the time left (at least 1 s). Orange/Red unfinished at the deadline → the run **fails** (stored events and the cache untouched). A Green level cut off by the deadline is logged and the run finishes (§28.11 item 6; the `warning_message` column is Phase 6). Worst case: deadline 150 s + one in-flight attempt 15 s + persist allowance 15 s ⇒ **≤ 180 s**. All values live in `config/disaster_sources.php` (`sync` block) and a test checks their relations. *(Original text: "no new request or retry wait is started after the deadline"; the retry rule above is the implemented form.)*
+**Total sync time limit [Exists] (v1.4 follow-up).** `DisasterSyncService` gives each client a `SyncDeadline` of **150 s** (`disaster_sources.sync.deadline_seconds`) at the start of the fetch phase and removes it afterwards. **No request starts after the deadline, and a retry starts only if its wait is shorter than the time left**; each attempt's timeout is also capped by the time left (at least 1 s). Orange/Red unfinished at the deadline → the run **fails** (stored events and the cache untouched). A Green level cut off by the deadline is logged and the run finishes (§28.11 item 6; the `warning_message` column was added in Phase 6). Worst case: deadline 150 s + one in-flight attempt 15 s + persist allowance 15 s ⇒ **≤ 180 s**. All values live in `config/disaster_sources.php` (`sync` block) and a test checks their relations. *(Original text: "no new request or retry wait is started after the deadline"; the retry rule above is the implemented form.)*
 
 | Setting | Value | Constraint it satisfies |
 |---|---|---|
@@ -2207,7 +2211,7 @@ The scheduler path has no queued row: `DisasterSyncService::sync()` returns `nul
 - **Local development:** `php artisan queue:work --timeout=240 --tries=1 --queue=default` (or with the `alerts,mail` queues added when Phase 4 lands), together with `php artisan schedule:work`. Check whether `composer dev` starts a worker and a scheduler and document the result; if it does not, both must be started in separate terminals.
 - **Production (deferred phase, §27.7):** a Supervisor-managed `queue:work --timeout=240 --tries=1 --max-time=3600 --sleep=3`, `autorestart=true`, `stopwaitsecs` ≥ 250, and `php artisan queue:restart` on every deploy; the OS cron entry for `schedule:run` every minute. Supervision is a requirement, not an option: a database queue does nothing without a worker.
 
-### 28.10 Detecting abandoned `running` runs [Approved; Future work]
+### 28.10 Detecting abandoned `running` runs [Approved; implemented in Phase 6, §30]
 
 **Rule:** every call of `DisasterSyncService::sync($key)` that has **acquired the `sync:{key}` lock** first marks as `failed` ("abandoned: the process stopped before finishing") every other `sync_runs` row of that source with `status = running`, and resets `data_sources.last_status` if it still says `running`. Likewise it marks `queued` rows older than 10 minutes as `failed` ("not picked up by a worker") with `UPDATE … WHERE status = 'queued' AND queued_at < now() - interval 10 minute`. This sweep is cleanup only; expiry is enforced by the job's own claim condition (§28.8), so a stale row never runs even if no sweep has happened.
 
@@ -2216,6 +2220,8 @@ The scheduler path has no queued row: `DisasterSyncService::sync()` returns `nul
 **Display fallback:** the Data Freshness read treats a `running` row whose `started_at` is older than 360 s (lock TTL + margin) as "Abandoned" for display, without writing, until the next sync's sweep records the failure.
 
 ### 28.11 Phase 2 follow-ups
+
+> **v1.6:** item 6 (the Green-level warning) is implemented in Phase 6: see §30.1.
 
 | # | Item | State today | Plan |
 |---|---|---|---|
@@ -2234,7 +2240,7 @@ The scheduler path has no queued row: `DisasterSyncService::sync()` returns `nul
 | **3 Country detection** | Country resolution runs **before** invalidation, so a country change counts as a relevant change and `country-alerts:{id}` can be cleared for the old and new country. |
 | **4 Email alerts** | No change. Alert dispatch stays after commit and independent of the cache. |
 | **5 Fast pages** | Create `DashboardCache` and `DashboardQueryService` (§28.5–§28.7); `?refresh=1` rebuilds from MySQL and **never** calls an external API; remove `DisasterDashboardService` external calls, the unreachable `$forceRefresh`, and the "Refresh" / "Syncing..." wording; add "Reload data", `generated_at` and `data_as_of`. **[Done in Phase 5; differences in §29.]** |
-| **6 Guides / contacts / admin** | `POST /admin/data-sources/refresh`, `RunSourceSync` with the lock-then-claim start sequence and the lock-unavailable exit (§28.8), the single `sync_runs` migration (columns in §28.8), the polling UI with the "Success with warnings" badge, the worker-not-running warning, `SourceHealthService`. |
+| **6 Guides / contacts / admin** *(done in Phase 6; differences and gaps in §30)* | `POST /admin/data-sources/refresh`, `RunSourceSync` with the lock-then-claim start sequence and the lock-unavailable exit (§28.8), the single `sync_runs` migration (columns in §28.8), the polling UI with the "Success with warnings" badge, the worker-not-running warning, `SourceHealthService`. |
 | **8 Final check** | Tests: cache hit / miss; Reload never calls HTTP (`Http::preventStrayRequests`); reload coalescing; a read after a sync never serves pre-sync data; **stale-reader test** (a reader that started before the generation bump cannot overwrite the new generation); no invalidation on failed sync or no-change sync; invalidation on a relevant change; 403 for non-admins; throttle; cooldown; unique job; `queued` stays `queued` without a worker; sweep marks an abandoned run failed but not a live one; an expired queued row is not run by a late worker (claim returns 0 rows); a job that cannot get the lock exits, deletes its unclaimed row and leaves no `running` or `failed` row; `all` creates two rows with one `request_uuid`; a warning run stays `status = success`; `retry_after` > job timeout asserted from config; run on MySQL as well as SQLite. |
 
 ### 28.13 Edited sections and conflicts reconciled
@@ -2342,6 +2348,114 @@ Temperature, condition, rain, wind speed, humidity and the daily minimum and max
 **`CACHE_STORE=database` and a MySQL outage.** The cache and the generation counter are stored in MySQL (the `cache` and `cache_locks` tables). A full MySQL outage therefore stops the cache, the generation counter and the dashboard data together: the pages cannot be served from either, and no stale payload can be served from anywhere else. The stale window above applies only when the cache store fails while the sync's own writes succeed, for example a problem limited to the cache tables or the cache connection.
 
 **Future option (not implemented).** *Option 2:* keep the generation counter in MySQL (a small table or a column), written in the same transaction as the sync, and read it on every request before the cache lookup. This would turn bounded staleness into a freshness guarantee, at the cost of one extra query per read and one migration. Revisit it only if stricter freshness becomes a requirement. Options 3 (retry or queue the invalidation) and 4 (compare a data timestamp on every read) were reviewed and not chosen.
+
+---
+
+## 30. v1.6: Phase 6 Implementation Record
+
+> **Status: [Implemented and tested locally; not yet committed at the time of writing].** This records what Phase 6 built. It does not change a requirement. §28 and §8.5 stay as the design; this section lists where the code differs and what is not built.
+
+### 30.1 What now exists
+
+| Item | State | Where |
+|---|---|---|
+| `sync_runs` extension | **[Implemented]** One migration: `trigger` (default `scheduler`), `requested_by`, `request_uuid` (indexed), `queued_at`, `warning_message`, and `started_at` made nullable. Checked on SQLite (tests) and on MySQL, including rollback and re-apply | `database/migrations/*_add_manual_sync_columns_to_sync_runs_table.php` |
+| Lock, sweep, claim | **[Implemented]** `DisasterSyncService::sync($key, ?$queuedRunId)` takes the `sync:{key}` lock without waiting, sweeps abandoned rows, then claims the queued row with one atomic conditional update (`status = queued` and `queued_at` within 10 minutes). A row that is expired or already taken is returned unchanged and not run | `app/Services/Disaster/Sync/DisasterSyncService.php` |
+| Abandoned-run sweep | **[Implemented]** Runs only while the lock is held. Leftover `running` rows become `failed` ("Abandoned: the process stopped before finishing."). `queued` rows older than 10 minutes become `failed` ("Not picked up by a worker."). `data_sources.last_status` is reset if it said `running` | same file |
+| `warning_message` | **[Implemented]** A GDACS run whose Green fetch fails stays `status = success`, stores the note in `warning_message`, and leaves `last_error` null and `consecutive_failures` 0 (§28.11 item 6) | `GdacsClient.php`, `FetchResult.php` |
+| `RunSourceSync` | **[Implemented]** `ShouldBeUnique` per source, `tries = 1`, `failOnTimeout`, timeout 240 s from config, `uniqueFor` 360 s. If the lock is busy it exits and deletes its own row only if still `queued` | `app/Jobs/RunSourceSync.php` |
+| Admin endpoints | **[Implemented]** `POST /admin/data-sources/refresh` (`source` = gdacs, usgs or all; `auth`, `verified`, `admin`, `throttle:3,1`; returns 202 with `queued`, `already_running`, `already_queued` or `cooldown` per source) and `GET /admin/data-sources` | `app/Http/Controllers/Admin/DataSourceController.php` |
+| Admin Data Freshness | **[Implemented]** Cards with the §18.2 status rules and thresholds, latest run with its display state (queued, running, success, success with warnings, failed, abandoned), the 2-minute "queue worker may not be running" note, the last 20 runs, and the Open-Meteo observation and capital coverage | `SourceHealthService::adminSnapshot()`, `resources/js/components/admin/FreshnessPanel.vue` |
+| Safety Guides and Emergency Contacts | **[Implemented]** One public page, `/preparedness`, with a country filter for the contacts and a disaster-type filter for the guides (§30.5); admin create, view, edit, publish or unpublish, delete, with server validation | `PreparednessController`, `Admin\SafetyGuideAdminController`, `Admin\EmergencyContactAdminController`, `app/Http/Requests/Admin/` |
+| Admin dashboard (`/admin`) | **[Implemented]** Tabs: Overview (users total, verified, admins; guide and contact counts), Safety Guides, Emergency Contacts, Data Freshness | `Admin\AdminDashboardController`, `resources/js/pages/admin/Dashboard.vue` |
+| Welcome previews | **[Implemented]** Up to 3 published guides (global, plus the user's country) and up to 3 contacts for the user's country; a guest gets a country chooser | `DisasterDashboardController::home()`, `Welcome.vue` |
+| Navigation | **[Done]** One "Be Prepared" item (to `/preparedness`) replaces the separate Be Prepared and Emergency Contacts items; an "Admin" item shows for admins; Data Freshness links removed from the header, footer and Welcome; footer and Welcome links point into `/preparedness` | `DisasterHeader.vue`, `DisasterFooter.vue`, `Welcome.vue` |
+| Public layout list | **[Required]** `resources/js/app.ts` lists the pages that bring their own `DisasterHeader`; any page not listed is wrapped in the starter sidebar app shell. `PreparednessPage` and `admin/Dashboard` are on the list (§30.5) | `resources/js/app.ts` |
+| Public `/freshness` | **[Removed]** route, controller method, `FreshnessPage.vue` and `DataFreshnessPanel.vue`. The public payload still carries the plain source status | `routes/web.php` |
+| Tests | **[Done]** `AdminSyncTest`, `SafetyGuidesContactsTest` (admin CRUD, validation, Welcome previews), `PreparednessTest` (the public page, filters, redirects, visibility), and the adapted functional, telemetry and alert tests | `tests/Feature/` |
+
+### 30.2 Differences from the design
+
+| # | Topic | Design | Implemented | Why |
+|---|---|---|---|---|
+| 1 | Service signature | `sync($key, ?SyncRun $claimedRun)` | `sync($key, ?int $queuedRunId)`. The lock, sweep and claim all happen inside the service, so the job cannot take the lock first and deadlock the service | The service must own the lock it releases |
+| 2 | Lock probe | Controller "reads the lock" | The controller takes the lock for up to 5 s and releases it at once. A scheduler tick in that instant would skip its run and try again at its next slot | Cache locks cannot be read without taking them |
+| 3 | Cooldown | "A sync finished less than 60 s ago" | Uses the newest `finished_at` of any run of the source, scheduled or manual | Simplest reading |
+| 4 | Guide and contact caching | Keys `guides:{country}:v1`, `contacts:{country}:v1`, 10 min (§16.3) | **Not cached.** The tables are small and read directly from MySQL, so there is no invalidation to get wrong | Simplicity; revisit only if measured slow |
+| 5 | Markdown | "Sanitised Markdown" | Rendered on the server by `Str::markdown` with `html_input = strip` and `allow_unsafe_links = false`, then shown with `v-html`. Raw HTML, `javascript:` and `data:` links are removed (tested) | No new package |
+| 6 | Hazard types and categories | Six hazards | Seven hazards (adds `drought` and `general`); contact categories police, fire, ambulance, disaster_agency, general | Matches the factories and the sync's event types |
+| 7 | Websites and phones | "Validated https"; phone link | `url:https` rule; phone allows digits and `+ * # ( ) - .` and spaces; the `tel:` link keeps only dialable characters | |
+| 8 | Manual sync sources | GDACS, USGS | Same. Weather is scheduled only | |
+| 9 | `view` action | A separate view | An expandable row in the admin table | |
+| 10 | Public pages | Two pages (§8.3) | **One page**, `/preparedness`. The old `/safety-guides` and `/emergency-contacts` return a 301 redirect that keeps only `country` | One resource page; old links (including alert emails already sent) keep working |
+| 11 | Guides and country | Guides filtered by the selected country plus global ones | Guides are filtered by **disaster type only**. The contacts country never filters or hides guides. A country-specific guide shows a country label; a global guide does not | The two filters had to be independent |
+| 12 | Guides of an inactive country | Not specified | A published guide whose country is inactive is **hidden** on the public page; global guides always show. Admins still manage it in `/admin` | Matches contacts, whose inactive-country data cannot be reached |
+| 13 | Contact fields | Agency, category, phones, website, notes | Same six stored fields. The table has no address or separate organization field, so none is shown | No schema change was approved |
+| 14 | Header "Data as of" | (Phase 5) shown on every page | Shown only on pages that pass `data-as-of`. The preparedness, admin and report pages do not pass it, so no "Data as of Not available" appears there | Those pages have no sync data to date |
+
+### 30.3 Not built in Phase 6
+
+| Item | HLD | State |
+|---|---|---|
+| "Scheduler stopped" banner and the `scheduler:heartbeat` command (§17.1, §17.3) | Must | **Not built.** Only the per-run "Queue worker may not be running" note exists. A stopped scheduler is not detected |
+| "Queue worker stopped" banner independent of a queued run | Must | **Not built** (same reason) |
+| Real guide and contact content from official sources | Must (Day 5 content) | **Not seeded.** Emergency numbers must be entered by an administrator from official sources; the application ships no invented numbers |
+| Admin Overview extras (events in 24 h, alert counts, quota) and the country review list | Should | **Not built** |
+| Welcome "Country alerts area" (`CountryAlerts.vue`) | Must | **Not built** (belongs with registration, Phase 7) |
+| Login and Register buttons, country registration | Must | **Not built** (Phase 7) |
+| `model:prune` for `sync_runs`, `queue:prune-failed`, backups | Should | **Not built** |
+
+### 30.4 Open items
+
+- `UD-1` (60 s cooldown) is implemented as written. `UD-2` (re-measure the 150 s and 240 s values) is unchanged: one live manual USGS run took about 1 s and was not a timing test.
+- **Local processes (checked with `php artisan dev:list`).** `composer run dev` starts the web server, a queue worker (`queue:listen --tries=1 --timeout=0`), `pail` and Vite. It does **not** start the scheduler, so `php artisan schedule:work` must run in another terminal for the GDACS, USGS, weather and alert schedules. The dev worker has `--timeout=0` (no limit), not the 240 s of §28.9; that is acceptable locally but must not be copied to production.
+- **Header width for signed-in users (measured in Chrome at 1024, 1280, 1440 and 1920 px).** A guest has no overflow at any of these widths. The signed-in "Account" link (89 px, already in the header) makes the **home page** overflow by 54 px at 1280 px for a regular user, because the "Data as of …" chip is also shown there. An admin also has the "Admin" nav item (87 px), which overflows the home page by 141 px at 1280 px and 53 px at 1440 px, and every page by 87 px at 1024 px. The "Reload data" button was visible at every width but its right edge sat 3 px past the viewport on the admin home page at 1280 px. `/admin` and `/preparedness` themselves do not overflow at 1280 px or wider. **Not fixed.** Measured candidates, applied only in the browser: dropping the "Data as of " prefix removes the regular user's overflow; it and an icon-only Admin link together still leave 17 px at 1280 px and 35 px at 1024 px for an admin.
+- **"Reload data" does nothing on pages without live data.** The header button is shown on `/preparedness`, `/admin` and the report pages, but those pages do not handle its event (found by reading the code; the click was not tested).
+- **No JavaScript test runner.** The filter, URL-state and layout behaviour of `/preparedness` was checked by server tests plus a scripted Chrome run against a scratch SQLite copy (§30.5). That run is not part of the automated suite.
+
+### 30.5 The unified public page: `/preparedness`
+
+> **Status: [Implemented, tested, and checked in Chrome].** Emergency Contacts and Safety Guides are **one public page**. It uses the public `DisasterHeader` and `DisasterFooter`, not the admin dashboard. Admin create, edit and delete stay in `/admin` and are not on this page.
+
+**Route and files.** `GET /preparedness` (`preparedness.index`) → `PreparednessController::index` → `resources/js/pages/PreparednessPage.vue`, built from `components/preparedness/ContactsSection.vue` and `GuidesSection.vue`. The page has two anchored sections (`#contacts`, `#guides`) and a small in-page navigation. No database change.
+
+**Filters and URL state.** Both filters live in the URL, so a refresh and the browser's Back and Forward buttons restore them.
+
+| Parameter | Filters | Values |
+|---|---|---|
+| `country` | The **Emergency Contacts** section only | An ISO2 code of an **active** country, case-insensitive |
+| `hazard` | The **Safety Guides** section only | `earthquake`, `cyclone`, `flood`, `volcano`, `wildfire`, `drought`, `general` |
+
+- **Independent.** Every change sends both current values, so changing one filter never resets the other. The guides query never reads `country`.
+- **Anchor and scroll.** A change keeps the scroll position and ends the URL with the section's anchor (`#contacts` or `#guides`).
+- **Bad values.** An unknown `hazard`, or an array parameter such as `hazard[]=x`, means "all types". An unknown `country`, or an array `country[]=x`, means "no country". Neither is an error.
+
+**Emergency Contacts section.**
+- The country comes from `?country`. If the parameter is **absent**, the signed-in user's saved country (`users.country_id`, active countries only) is the default. A guest, a user with no saved country, or a saved country that is now inactive gets the **"Choose a country"** prompt.
+- A parameter that is **present but empty** (`?country=`) is the visitor's deliberate "no country": the prompt shows even when a saved country exists. The page sends it only when a saved country exists.
+- Shown: published contacts of the chosen country, by `sort_order` then agency name. Each card shows the category, agency, the phone as a `tel:` link (dialable characters only), an alternative phone, notes, and a website link that opens in a new tab with `rel="noopener noreferrer"`. Websites are https-only (the admin rule, §30.2).
+- **Empty states:** no country chosen ("Choose a country to see its emergency contacts."); a country with no published contacts ("No emergency contacts have been published for this country yet.").
+
+**Safety Guides section.**
+- Shown: **published** guides of the chosen type, or every published guide for "All types", by `sort_order` then title, whatever country the contacts show. "All types" groups them under a heading per type; one type shows only that type. A country-specific guide has a country label; a global guide has none. A published guide whose country is inactive is hidden (§30.2 item 12). Each guide is an expandable card with the server-sanitised Markdown (§30.2 item 5).
+- **Empty states:** no guides at all ("No safety guides have been published yet."); a type with none ("No safety guides have been published for {type} yet.").
+
+**Old URLs.** Both return **301** and keep only the `country` parameter; every other parameter is dropped, and an array value becomes empty.
+
+| Old URL | Redirects to |
+|---|---|
+| `/emergency-contacts` | `/preparedness#contacts` |
+| `/emergency-contacts?country=ID` | `/preparedness?country=ID#contacts` |
+| `/safety-guides` | `/preparedness#guides` |
+| `/safety-guides?country=TH` | `/preparedness?country=TH#guides` |
+
+The alert email (§13) now links to the new URLs. Old emails keep working through these redirects (tested by following the redirect to the page).
+
+**Layout allow-list [Required].** `resources/js/app.ts` chooses a layout by page name. A page that renders its own `DisasterHeader` must be in `publicDisasterPages`; **any page not in the list is wrapped in the starter sidebar app shell** ("Laravel", Dashboard, Repository, Documentation) and gives a hydration mismatch. `PreparednessPage` and `admin/Dashboard` are in the list. A static test (`PreparednessTest`) checks both, and checks that the removed `FreshnessPage` is not. **Any new public or admin page of this kind must be added to the list.** Server tests alone could not catch this; it was found in Chrome.
+
+**Header.** One "Be Prepared" item links to `/preparedness`. The "Data as of" chip shows only on pages that pass `data-as-of` (§30.2 item 14).
+
+**What was checked in Chrome** (headless Chrome 157 against a scratch SQLite copy of the schema with sample content; the MySQL development data was not used): filters and URL state, Back and Forward, refresh, anchors, scroll position, all four empty states, the signed-in saved-country default and the explicit "no country" override, the old-URL redirects, mobile (375 px) layout, the admin tabs, and the absence of the sidebar shell. Known limits of the header at some widths are in §30.4.
 
 ---
 

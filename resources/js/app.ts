@@ -16,12 +16,13 @@ void createInertiaApp({
             'MapPage',
             'EventsPage',
             'WeatherPage',
-            'FreshnessPage',
+            'PreparednessPage',
             'EventDetailPage',
             'CountryMonitoringPage',
             'reports/Create',
             'reports/MyReports',
             'admin/reports/Index',
+            'admin/Dashboard',
         ]);
 
         switch (true) {

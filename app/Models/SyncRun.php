@@ -27,9 +27,18 @@ class SyncRun extends Model
     protected function casts(): array
     {
         return [
+            'queued_at' => 'datetime',
             'started_at' => 'datetime',
             'finished_at' => 'datetime',
         ];
+    }
+
+    /**
+     * @return BelongsTo<User, $this>
+     */
+    public function requestedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'requested_by');
     }
 
     /**

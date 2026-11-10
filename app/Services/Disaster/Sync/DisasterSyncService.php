@@ -30,6 +30,9 @@ class DisasterSyncService
 {
     private const CHUNK_SIZE = 200;
 
+    /** A queued manual run that no worker claimed in this time is expired (HLD §28.8). */
+    private const QUEUE_EXPIRY_MINUTES = 10;
+
     /**
      * @var array<string, SourceClient>
      */
@@ -58,11 +61,17 @@ class DisasterSyncService
     }
 
     /**
+     * Run one source under the `sync:{source}` lock.
+     *
+     * With `$queuedRunId` (the admin "Sync from sources" job, HLD §28.8) the order is fixed: take the lock without
+     * waiting, sweep abandoned rows, then claim the queued row with one atomic update. A row that is expired or
+     * already claimed is not run and is returned unchanged.
+     *
      * @return SyncRun|null null when another run of the same source holds the lock
      *
      * @throws InvalidArgumentException for an unknown source
      */
-    public function sync(string $key): ?SyncRun
+    public function sync(string $key, ?int $queuedRunId = null): ?SyncRun
     {
         $client = $this->clients[$key] ?? throw new InvalidArgumentException("Unknown disaster source [{$key}].");
 
@@ -73,16 +82,59 @@ class DisasterSyncService
         }
 
         try {
-            return $this->run($client);
+            $this->sweepAbandoned($key);
+
+            if ($queuedRunId === null) {
+                return $this->run($client);
+            }
+
+            $claimed = SyncRun::query()
+                ->where('id', $queuedRunId)
+                ->where('status', 'queued')
+                ->where('queued_at', '>=', Carbon::now()->subMinutes(self::QUEUE_EXPIRY_MINUTES))
+                ->update(['status' => 'running', 'started_at' => Carbon::now()]);
+
+            if ($claimed === 0) {
+                Log::info("Sync run {$queuedRunId} for {$key} was not claimed (expired or already taken).");
+
+                return SyncRun::query()->find($queuedRunId);
+            }
+
+            return $this->run($client, SyncRun::query()->findOrFail($queuedRunId));
         } finally {
             $lock->release();
         }
     }
 
-    private function run(SourceClient $client): SyncRun
+    /**
+     * HLD §28.10. Runs only while this process holds the source lock, so no live run exists for the source.
+     * Marks leftover `running` rows failed and queued rows older than the expiry failed.
+     */
+    private function sweepAbandoned(string $key): void
+    {
+        $now = Carbon::now();
+
+        $abandoned = SyncRun::query()->where('source_key', $key)->where('status', 'running')->update([
+            'status' => 'failed',
+            'error_message' => 'Abandoned: the process stopped before finishing.',
+            'finished_at' => $now,
+        ]);
+
+        SyncRun::query()
+            ->where('source_key', $key)
+            ->where('status', 'queued')
+            ->where('queued_at', '<', $now->copy()->subMinutes(self::QUEUE_EXPIRY_MINUTES))
+            ->update(['status' => 'failed', 'error_message' => 'Not picked up by a worker.', 'finished_at' => $now]);
+
+        if ($abandoned > 0) {
+            DataSource::query()->where('key', $key)->where('last_status', 'running')->update(['last_status' => 'failed']);
+        }
+    }
+
+    private function run(SourceClient $client, ?SyncRun $claimed = null): SyncRun
     {
         $key = $client->key();
-        $startedAt = Carbon::now();
+        $startedAt = $claimed?->started_at ?? Carbon::now();
 
         $source = DataSource::query()->firstOrCreate(['key' => $key], [
             'name' => (string) config("disaster_sources.sources.{$key}.name", $key),
@@ -92,7 +144,7 @@ class DisasterSyncService
 
         $source->update(['last_attempt_at' => $startedAt, 'last_status' => 'running']);
 
-        $run = SyncRun::query()->create([
+        $run = $claimed ?? SyncRun::query()->create([
             'source_key' => $key,
             'status' => 'running',
             'started_at' => $startedAt,
@@ -118,6 +170,7 @@ class DisasterSyncService
             'created_count' => $counts['created'],
             'updated_count' => $counts['updated'],
             'skipped_count' => $result->skippedCount,
+            'warning_message' => $result->warning,
             'duration_ms' => $this->durationMs($timer),
             'finished_at' => Carbon::now(),
         ]);

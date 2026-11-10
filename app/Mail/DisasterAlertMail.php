@@ -51,8 +51,8 @@ class DisasterAlertMail extends Mailable
                     ? number_format((float) $this->event->latitude, 3).', '.number_format((float) $this->event->longitude, 3)
                     : null,
                 'eventsUrl' => route('disaster.events'),
-                'contactsUrl' => url('/emergency-contacts'.($country ? '?country='.$country->iso2 : '')),
-                'guidesUrl' => url('/safety-guides'),
+                'contactsUrl' => route('preparedness.index', $country ? ['country' => $country->iso2] : []).'#contacts',
+                'guidesUrl' => route('preparedness.index').'#guides',
                 'settingsUrl' => route('profile.edit'),
             ],
         );

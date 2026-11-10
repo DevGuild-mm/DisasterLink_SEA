@@ -91,10 +91,10 @@ import { ShieldAlert } from '@lucide/vue';
                         </li>
                         <li>
                             <Link
-                                href="/freshness"
+                                href="/preparedness"
                                 class="transition-colors hover:text-foreground hover:underline"
                             >
-                                Data Provenance & Freshness
+                                Safety Guides
                             </Link>
                         </li>
                     </ul>
@@ -154,9 +154,9 @@ import { ShieldAlert } from '@lucide/vue';
                         >Weather</Link
                     >
                     <Link
-                        href="/freshness"
+                        href="/preparedness#contacts"
                         class="transition-colors hover:text-foreground hover:underline"
-                        >Data Freshness</Link
+                        >Emergency Contacts</Link
                     >
                 </div>
             </div>

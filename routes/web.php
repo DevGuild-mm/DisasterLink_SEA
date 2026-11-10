@@ -1,11 +1,16 @@
 <?php
 
+use App\Http\Controllers\Admin\AdminDashboardController;
+use App\Http\Controllers\Admin\DataSourceController;
 use App\Http\Controllers\Admin\DisasterReportAdminController;
+use App\Http\Controllers\Admin\EmergencyContactAdminController;
 use App\Http\Controllers\Admin\EmergencyCoordinationAdminController;
+use App\Http\Controllers\Admin\SafetyGuideAdminController;
 use App\Http\Controllers\DisasterDashboardController;
 use App\Http\Controllers\DisasterIntelligenceController;
 use App\Http\Controllers\DisasterReportController;
 use App\Http\Controllers\EmergencyCoordinationController;
+use App\Http\Controllers\PreparednessController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', [DisasterDashboardController::class, 'home'])->name('home');
@@ -16,8 +21,11 @@ Route::get('/events/{id}', [DisasterDashboardController::class, 'eventDetail'])-
 Route::get('/countries/{country?}', [DisasterDashboardController::class, 'countries'])->name('disaster.countries')->middleware('module:countries');
 Route::get('/intelligence', [DisasterIntelligenceController::class, 'index'])->name('disaster.intelligence')->middleware('module:intelligence');
 Route::get('/coordination', [EmergencyCoordinationController::class, 'index'])->name('coordination.index')->middleware('module:coordination');
+Route::get('/preparedness', [PreparednessController::class, 'index'])->name('preparedness.index');
+// The two old public pages moved into /preparedness (permanent redirects; alert emails already sent link to them).
+Route::get('/safety-guides', [PreparednessController::class, 'legacyGuides']);
+Route::get('/emergency-contacts', [PreparednessController::class, 'legacyContacts']);
 Route::get('/weather', [DisasterDashboardController::class, 'weather'])->name('disaster.weather');
-Route::get('/freshness', [DisasterDashboardController::class, 'freshness'])->name('disaster.freshness');
 Route::get('/api/disaster-dashboard', [DisasterDashboardController::class, 'api'])->name('api.disaster.dashboard')->middleware('throttle:60,1');
 Route::get('/api/countries/{country?}', [DisasterDashboardController::class, 'apiCountries'])->name('api.disaster.countries')->middleware(['module:countries', 'throttle:60,1']);
 Route::get('/api/intelligence', [DisasterIntelligenceController::class, 'api'])->name('api.disaster.intelligence')->middleware(['module:intelligence', 'throttle:60,1']);
@@ -34,6 +42,18 @@ Route::middleware(['module:reports', 'auth'])->group(function () {
 });
 
 Route::middleware(['auth', 'verified', 'admin'])->prefix('admin')->name('admin.')->group(function () {
+    Route::get('/', [AdminDashboardController::class, 'index'])->name('dashboard');
+
+    Route::post('/safety-guides', [SafetyGuideAdminController::class, 'store'])->name('safety-guides.store');
+    Route::put('/safety-guides/{guide}', [SafetyGuideAdminController::class, 'update'])->name('safety-guides.update');
+    Route::delete('/safety-guides/{guide}', [SafetyGuideAdminController::class, 'destroy'])->name('safety-guides.destroy');
+    Route::post('/emergency-contacts', [EmergencyContactAdminController::class, 'store'])->name('emergency-contacts.store');
+    Route::put('/emergency-contacts/{contact}', [EmergencyContactAdminController::class, 'update'])->name('emergency-contacts.update');
+    Route::delete('/emergency-contacts/{contact}', [EmergencyContactAdminController::class, 'destroy'])->name('emergency-contacts.destroy');
+
+    Route::get('/data-sources', [DataSourceController::class, 'index'])->name('data-sources.index');
+    Route::post('/data-sources/refresh', [DataSourceController::class, 'refresh'])->name('data-sources.refresh')->middleware('throttle:3,1');
+
     Route::middleware('module:reports')->group(function () {
         Route::get('/reports', [DisasterReportAdminController::class, 'index'])->name('reports.index');
         Route::patch('/reports/{report}/status', [DisasterReportAdminController::class, 'updateStatus'])->name('reports.update_status');

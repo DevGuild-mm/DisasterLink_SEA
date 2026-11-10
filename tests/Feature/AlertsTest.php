@@ -457,8 +457,10 @@ test('the email is a country-level alert and never claims the user area is affec
         ->toContain('USGS')
         ->toContain('https://earthquake.usgs.gov/earthquakes/eventpage/us1')
         ->toContain('It does not mean your city or area is directly affected')
-        ->toContain('/emergency-contacts?country=ID')
-        ->toContain('/safety-guides')
+        ->toContain('/preparedness?country=ID#contacts')
+        ->toContain('/preparedness#guides')
+        ->not->toContain('/emergency-contacts')
+        ->not->toContain('/safety-guides')
         ->not->toContain('Delayed delivery');
 });
 

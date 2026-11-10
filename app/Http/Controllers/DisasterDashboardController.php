@@ -2,6 +2,9 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Country;
+use App\Models\EmergencyContact;
+use App\Models\SafetyGuide;
 use App\Models\Shelter;
 use App\Services\Disaster\DisasterDashboardService;
 use Illuminate\Http\JsonResponse;
@@ -19,12 +22,41 @@ class DisasterDashboardController extends Controller
     /**
      * Display the DisasterLinkSEA Homepage with real-time initial data.
      */
-    public function home(): Response
+    public function home(Request $request): Response
     {
         $dashboardData = $this->dashboardService->getDashboardData();
 
+        $countries = Country::query()->where('is_active', true)->orderBy('sort_order')->get(['id', 'iso2', 'name']);
+        $country = $countries->firstWhere('id', $request->user()?->country_id);
+
+        // HLD §8.1: up to 3 published guides (global, or the signed-in user's country) and up to 3 contacts.
+        $guides = SafetyGuide::query()
+            ->published()
+            ->where(fn ($q) => $q->whereNull('country_id')->when($country, fn ($w) => $w->orWhere('country_id', $country->id)))
+            ->orderBy('sort_order')->orderBy('title')
+            ->limit(3)
+            ->get(['id', 'title', 'summary', 'hazard_type']);
+
+        $contacts = $country === null ? collect() : EmergencyContact::query()
+            ->published()
+            ->where('country_id', $country->id)
+            ->orderBy('sort_order')->orderBy('agency_name')
+            ->limit(3)
+            ->get(['id', 'agency_name', 'category', 'phone'])
+            ->map(fn (EmergencyContact $c): array => [
+                'id' => $c->id,
+                'agency_name' => $c->agency_name,
+                'category' => $c->category,
+                'phone' => $c->phone,
+                'phone_link' => EmergencyContact::telLink($c->phone),
+            ]);
+
         return Inertia::render('Welcome', [
             'initialDashboardData' => $dashboardData,
+            'guidesPreview' => $guides,
+            'contactsPreview' => $contacts,
+            'contactsCountry' => $country,
+            'countries' => $countries,
         ]);
     }
 
@@ -115,18 +147,6 @@ class DisasterDashboardController extends Controller
         $dashboardData = $this->dashboardService->getDashboardData();
 
         return Inertia::render('WeatherPage', [
-            'initialDashboardData' => $dashboardData,
-        ]);
-    }
-
-    /**
-     * Display Data Source Provenance & Freshness Diagnostics Page.
-     */
-    public function freshness(): Response
-    {
-        $dashboardData = $this->dashboardService->getDashboardData();
-
-        return Inertia::render('FreshnessPage', [
             'initialDashboardData' => $dashboardData,
         ]);
     }

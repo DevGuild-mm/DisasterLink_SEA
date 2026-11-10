@@ -15,5 +15,6 @@ final readonly class FetchResult
         public int $fetchedCount,
         public int $skippedCount,
         public ?int $httpStatus,
+        public ?string $warning = null,
     ) {}
 }

@@ -2,9 +2,9 @@
 import { Link, usePage } from '@inertiajs/vue3';
 import {
     AlertCircle,
+    BookOpen,
     Clock,
     CloudSun,
-    Database,
     Globe,
     Home,
     LayoutDashboard,
@@ -58,13 +58,22 @@ function toggleDarkMode() {
     updateAppearance(resolvedAppearance.value === 'dark' ? 'light' : 'dark');
 }
 
-const navItems = [
+const isAdmin = computed(
+    () =>
+        (page.props.auth as { user?: { role?: string } | null } | undefined)
+            ?.user?.role === 'admin',
+);
+
+const navItems = computed(() => [
     { name: 'Home', href: '/', icon: Home },
     { name: 'Disaster Map', href: '/map', icon: Globe },
     { name: 'Live Events', href: '/events', icon: ShieldAlert },
     { name: 'Weather', href: '/weather', icon: CloudSun },
-    { name: 'Data Freshness', href: '/freshness', icon: Database },
-];
+    { name: 'Be Prepared', href: '/preparedness', icon: BookOpen },
+    ...(isAdmin.value
+        ? [{ name: 'Admin', href: '/admin', icon: LayoutDashboard }]
+        : []),
+]);
 
 function isItemActive(href: string): boolean {
     if (href === '/') {
@@ -216,8 +225,13 @@ function formatTime(isoString: string | null): string {
                         >
                         <template v-else>{{ countdown }}s</template>
                     </span>
-                    <span class="hidden text-border xl:inline">|</span>
+                    <span
+                        v-if="dataAsOf !== undefined"
+                        class="hidden text-border xl:inline"
+                        >|</span
+                    >
                     <div
+                        v-if="dataAsOf !== undefined"
                         class="hidden items-center gap-1 xl:flex"
                         :title="`Page data loaded ${formatTime(lastUpdated)}. Sources last synced ${formatTime(dataAsOf ?? null)}.`"
                     >
@@ -318,7 +332,7 @@ function formatTime(isoString: string | null): string {
                         <template v-else-if="isRefreshing">Loading…</template>
                         <template v-else>Auto-Sync: {{ countdown }}s</template>
                     </span>
-                    <span class="font-mono"
+                    <span v-if="dataAsOf !== undefined" class="font-mono"
                         >Data as of: {{ formatTime(dataAsOf ?? null) }}</span
                     >
                 </div>
