@@ -15,6 +15,8 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import DisasterFooter from '@/components/disaster/DisasterFooter.vue';
 import DisasterHeader from '@/components/disaster/DisasterHeader.vue';
+import CountryAlerts from '@/components/disaster/CountryAlerts.vue';
+import type { CountryAlertsData } from '@/components/disaster/CountryAlerts.vue';
 import RegionalOverview from '@/components/disaster/RegionalOverview.vue';
 import { useDisasterTelemetry } from '@/composables/useDisasterTelemetry';
 import type { DashboardData } from '@/types/disaster';
@@ -36,6 +38,7 @@ const props = defineProps<{
     }>;
     contactsCountry?: { iso2: string; name: string } | null;
     countries?: Array<{ id: number; iso2: string; name: string }>;
+    countryAlerts?: CountryAlertsData | null;
 }>();
 
 function chooseContactsCountry(event: Event) {
@@ -455,6 +458,9 @@ const dataSources = [
                     </div>
                 </div>
             </section>
+
+            <!-- Country alerts: guest promotion or the signed-in user's recent alerts (HLD §8.2) -->
+            <CountryAlerts :country-alerts="countryAlerts" />
 
             <!-- B. Regional Overview Cards (Home / Overview) -->
             <div class="border-b border-border/60 bg-muted/15">

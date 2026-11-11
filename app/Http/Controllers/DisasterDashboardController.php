@@ -6,6 +6,7 @@ use App\Models\Country;
 use App\Models\EmergencyContact;
 use App\Models\SafetyGuide;
 use App\Models\Shelter;
+use App\Services\Disaster\Dashboard\CountryAlertsQuery;
 use App\Services\Disaster\DisasterDashboardService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -22,7 +23,7 @@ class DisasterDashboardController extends Controller
     /**
      * Display the DisasterLinkSEA Homepage with real-time initial data.
      */
-    public function home(Request $request): Response
+    public function home(Request $request, CountryAlertsQuery $countryAlerts): Response
     {
         $dashboardData = $this->dashboardService->getDashboardData();
 
@@ -53,6 +54,12 @@ class DisasterDashboardController extends Controller
 
         return Inertia::render('Welcome', [
             'initialDashboardData' => $dashboardData,
+            'status' => $request->session()->get('status'),
+            'countryAlerts' => $request->user() === null ? null : [
+                'country' => $country,
+                'alerts' => $country === null ? [] : $countryAlerts->forCountry($country->id),
+                'window_days' => CountryAlertsQuery::WINDOW_DAYS,
+            ],
             'guidesPreview' => $guides,
             'contactsPreview' => $contacts,
             'contactsCountry' => $country,

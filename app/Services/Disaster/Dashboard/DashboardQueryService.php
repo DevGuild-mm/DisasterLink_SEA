@@ -20,7 +20,7 @@ class DashboardQueryService
 
     private const MAX_EVENTS = 500;
 
-    private const CATEGORIES = [
+    public const CATEGORIES = [
         'earthquake' => 'Earthquake',
         'cyclone' => 'Tropical Cyclone',
         'flood' => 'Flood',
