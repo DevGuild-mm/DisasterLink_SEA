@@ -1,32 +1,43 @@
 <script setup lang="ts">
-import { Link, usePage } from '@inertiajs/vue3';
+import { Link, router, usePage } from '@inertiajs/vue3';
 import {
     AlertCircle,
-    BellRing,
-    ClipboardList,
+    BookOpen,
     Clock,
     CloudSun,
-    Database,
     Globe,
     Home,
     LayoutDashboard,
-    LifeBuoy,
-    MapPin,
+    LogOut,
     Menu,
     Moon,
-    PlusCircle,
     RefreshCw,
+    Settings,
     ShieldAlert,
-    ShieldCheck,
     Sun,
+    UserRound,
     X,
 } from '@lucide/vue';
 import { computed, onMounted, ref } from 'vue';
+import BrandLogo from '@/components/BrandLogo.vue';
 import { Button } from '@/components/ui/button';
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuLabel,
+    DropdownMenuSeparator,
+    DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { useAppearance } from '@/composables/useAppearance';
+import { login, logout, register } from '@/routes';
+import { edit as editProfile } from '@/routes/profile';
 
-defineProps<{
+const props = defineProps<{
+    /** When the page data was built (generated_at). */
     lastUpdated: string | null;
+    /** The last successful GDACS/USGS sync (data_as_of). */
+    dataAsOf?: string | null;
     isRefreshing: boolean;
     countdown: number;
     isTabVisible: boolean;
@@ -61,16 +72,40 @@ function toggleDarkMode() {
     updateAppearance(resolvedAppearance.value === 'dark' ? 'light' : 'dark');
 }
 
-const navItems = [
+const authUser = computed(
+    () =>
+        (
+            page.props.auth as
+                | {
+                      user?: {
+                          name?: string;
+                          email?: string;
+                          role?: string;
+                      } | null;
+                  }
+                | undefined
+        )?.user ?? null,
+);
+const isAdmin = computed(() => authUser.value?.role === 'admin');
+
+/**
+ * The sync chip and Reload button only mean something on pages that load
+ * live data. Those pages pass `data-as-of`; static pages do not.
+ */
+const hasLiveData = computed(() => props.dataAsOf !== undefined);
+
+function handleLogout() {
+    mobileMenuOpen.value = false;
+    router.flushAll();
+}
+
+const navItems = computed(() => [
     { name: 'Home', href: '/', icon: Home },
-    { name: 'Early Warning', href: '/intelligence', icon: BellRing },
-    { name: 'Relief & Shelters', href: '/coordination', icon: LifeBuoy },
-    { name: 'Countries', href: '/countries', icon: MapPin },
     { name: 'Disaster Map', href: '/map', icon: Globe },
     { name: 'Live Events', href: '/events', icon: ShieldAlert },
     { name: 'Weather', href: '/weather', icon: CloudSun },
-    { name: 'Data Freshness', href: '/freshness', icon: Database },
-];
+    { name: 'Be Prepared', href: '/preparedness', icon: BookOpen },
+]);
 
 function isItemActive(href: string): boolean {
     if (href === '/') {
@@ -86,14 +121,13 @@ function isItemActive(href: string): boolean {
 }
 
 function formatTime(isoString: string | null): string {
-    if (!isoString) return 'Syncing...';
+    if (!isoString) return 'Not available';
     if (!isMounted.value) return 'Live';
     try {
         const d = new Date(isoString);
         return d.toLocaleTimeString([], {
             hour: '2-digit',
             minute: '2-digit',
-            second: '2-digit',
         });
     } catch {
         return isoString;
@@ -113,19 +147,9 @@ function formatTime(isoString: string | null): string {
                 href="/"
                 class="group flex shrink-0 items-center gap-2.5 focus:outline-none"
             >
-                <div
-                    class="relative flex size-9 items-center justify-center rounded-lg bg-destructive/10 text-destructive ring-1 ring-destructive/25 transition-colors group-hover:bg-destructive/15"
-                >
-                    <ShieldAlert class="size-5" />
-                    <span class="absolute -top-0.5 -right-0.5 flex size-2.5">
-                        <span
-                            class="absolute inline-flex h-full w-full animate-ping rounded-full bg-destructive opacity-75"
-                        ></span>
-                        <span
-                            class="relative inline-flex size-2.5 rounded-full bg-destructive"
-                        ></span>
-                    </span>
-                </div>
+                <BrandLogo
+                    class="size-10 transition-opacity group-hover:opacity-90"
+                />
                 <div class="flex flex-col">
                     <div class="flex items-center gap-1.5">
                         <span
@@ -187,17 +211,19 @@ function formatTime(isoString: string | null): string {
                 </Link>
             </nav>
 
-            <!-- Right Actions: Sync Status, Refresh, Dark Mode Toggle, Mobile Menu -->
+            <!-- Right Actions: Sync Status, Reload data, Dark Mode Toggle, Mobile Menu -->
             <div class="flex shrink-0 items-center gap-1.5 sm:gap-2">
                 <!-- Live Sync Pill -->
                 <div
-                    class="hidden items-center gap-2 rounded-md border border-border/70 bg-muted/40 px-2.5 py-1 text-[11px] text-muted-foreground md:flex"
+                    v-if="hasLiveData"
+                    data-test="sync-chip"
+                    class="hidden items-center gap-2 rounded-md border border-border/70 bg-muted/40 px-2.5 py-1 text-[11px] text-muted-foreground xl:flex"
                     :title="
                         !isTabVisible
                             ? 'Polling paused while browser tab is hidden'
                             : hasStaleSources
-                              ? 'One or more sources serving cached data'
-                              : 'Auto-refreshing every 60 seconds'
+                              ? 'One or more sources have not synced recently'
+                              : 'Page reloads stored data every 60 seconds'
                     "
                 >
                     <span class="flex size-2">
@@ -214,30 +240,36 @@ function formatTime(isoString: string | null): string {
                             ]"
                         ></span>
                     </span>
-                    <span class="font-mono whitespace-nowrap">
+                    <span class="hidden font-mono whitespace-nowrap xl:inline">
                         <template v-if="!isTabVisible">Paused</template>
-                        <template v-else-if="isRefreshing">Syncing...</template>
+                        <template v-else-if="isRefreshing">Loading…</template>
                         <template v-else-if="hasStaleSources"
                             >Stale • {{ countdown }}s</template
                         >
                         <template v-else>{{ countdown }}s</template>
                     </span>
                     <span class="hidden text-border xl:inline">|</span>
-                    <div class="hidden items-center gap-1 xl:flex">
+                    <div
+                        class="flex items-center gap-1"
+                        :title="`Page data loaded ${formatTime(lastUpdated)}. Sources last synced ${formatTime(dataAsOf ?? null)}.`"
+                    >
                         <Clock class="size-3 text-muted-foreground/70" />
-                        <span class="font-mono whitespace-nowrap">{{
-                            formatTime(lastUpdated)
-                        }}</span>
+                        <span class="font-mono whitespace-nowrap"
+                            >{{ formatTime(dataAsOf ?? null) }}</span
+                        >
                     </div>
                 </div>
 
-                <!-- Manual Refresh Button -->
+                <!-- Reload data button -->
                 <Button
+                    v-if="hasLiveData"
                     variant="outline"
                     size="sm"
+                    data-test="reload-data"
                     class="h-8 cursor-pointer gap-1.5 border-border/80 bg-card px-2.5 text-xs font-medium text-foreground hover:bg-muted"
                     :disabled="isRefreshing"
-                    title="Refresh live disaster data"
+                    aria-label="Reload data"
+                    title="Reload the latest stored data. Does not contact GDACS or USGS."
                     @click="emit('refresh')"
                 >
                     <RefreshCw
@@ -246,51 +278,8 @@ function formatTime(isoString: string | null): string {
                             isRefreshing && 'animate-spin text-destructive',
                         ]"
                     />
-                    <span class="hidden sm:inline">Refresh</span>
+                    <span class="hidden 2xl:inline">Reload data</span>
                 </Button>
-
-                <!-- Report Disaster CTA Button -->
-                <Link
-                    href="/reports/create"
-                    class="flex h-8 items-center gap-1.5 rounded-md bg-destructive px-2.5 text-xs font-semibold text-destructive-foreground shadow-sm transition-colors hover:bg-destructive/90"
-                    title="Submit a citizen disaster observation report"
-                >
-                    <PlusCircle class="size-3.5" />
-                    <span class="hidden sm:inline">Report Disaster</span>
-                </Link>
-
-                <!-- My Reports (for authenticated users) -->
-                <Link
-                    v-if="$page.props.auth?.user"
-                    href="/my-reports"
-                    :class="[
-                        'hidden h-8 items-center gap-1.5 rounded-md border border-border/80 px-2.5 text-xs font-medium transition-colors md:inline-flex',
-                        isItemActive('/my-reports')
-                            ? 'border-destructive/30 bg-destructive/10 font-semibold text-foreground'
-                            : 'bg-card text-foreground hover:bg-muted',
-                    ]"
-                    title="View reports submitted by you"
-                >
-                    <ClipboardList class="size-3.5" />
-                    <span class="hidden xl:inline">My Reports</span>
-                </Link>
-
-                <!-- Admin Review Link (for administrators) -->
-                <Link
-                    v-if="$page.props.auth?.user?.role === 'admin'"
-                    href="/admin/reports"
-                    :class="[
-                        'hidden h-8 items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 text-xs font-semibold text-amber-600 transition-colors hover:bg-amber-500/20 md:inline-flex dark:text-amber-400',
-                        isItemActive('/admin/reports')
-                            ? 'ring-1 ring-amber-500'
-                            : '',
-                    ]"
-                    title="Admin Moderation Console"
-                >
-                    <ShieldCheck class="size-3.5" />
-                    <span>Admin Review</span>
-                </Link>
-
                 <!-- Dark Mode / Light Mode Toggle Button -->
                 <Button
                     variant="outline"
@@ -314,15 +303,85 @@ function formatTime(isoString: string | null): string {
                     />
                 </Button>
 
-                <!-- Optional Authenticated Dashboard Link -->
-                <Link
-                    v-if="$page.props.auth?.user"
-                    href="/dashboard"
-                    class="hidden h-8 items-center gap-1.5 rounded-md border border-border/80 bg-card px-2.5 text-xs font-medium text-foreground hover:bg-muted sm:inline-flex"
-                >
-                    <LayoutDashboard class="size-3.5" />
-                    <span class="hidden xl:inline">Account</span>
-                </Link>
+                <!-- Guest actions -->
+                <template v-if="!authUser">
+                    <Link
+                        :href="login()"
+                        data-test="header-login"
+                        class="hidden h-8 items-center rounded-md border border-border bg-background px-3 text-xs font-medium text-foreground transition-colors hover:bg-muted md:inline-flex"
+                    >
+                        Log in
+                    </Link>
+                    <Link
+                        :href="register()"
+                        data-test="header-register"
+                        class="hidden h-8 items-center rounded-md bg-primary px-3 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90 md:inline-flex"
+                    >
+                        Register
+                    </Link>
+                </template>
+
+                <!-- Account menu -->
+                <DropdownMenu v-else>
+                    <DropdownMenuTrigger as-child>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            data-test="account-menu"
+                            class="hidden h-8 cursor-pointer gap-1.5 border-border/80 bg-card px-2.5 text-xs font-medium text-foreground hover:bg-muted md:inline-flex"
+                            aria-label="Account menu"
+                        >
+                            <UserRound class="size-3.5" />
+                            <span class="hidden xl:inline">Account</span>
+                        </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" class="w-56">
+                        <DropdownMenuLabel class="font-normal">
+                            <div class="truncate text-sm font-medium">
+                                {{ authUser.name }}
+                            </div>
+                            <div
+                                class="truncate text-xs text-muted-foreground"
+                            >
+                                {{ authUser.email }}
+                            </div>
+                        </DropdownMenuLabel>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem as-child>
+                            <Link
+                                :href="editProfile()"
+                                class="w-full cursor-pointer"
+                                data-test="account-settings"
+                            >
+                                <Settings class="mr-2 size-4" />
+                                Settings
+                            </Link>
+                        </DropdownMenuItem>
+                        <DropdownMenuItem v-if="isAdmin" as-child>
+                            <Link
+                                href="/admin"
+                                class="w-full cursor-pointer"
+                                data-test="account-admin"
+                            >
+                                <LayoutDashboard class="mr-2 size-4" />
+                                Admin
+                            </Link>
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem as-child>
+                            <Link
+                                :href="logout()"
+                                as="button"
+                                class="w-full cursor-pointer"
+                                data-test="logout-button"
+                                @click="handleLogout"
+                            >
+                                <LogOut class="mr-2 size-4" />
+                                Log out
+                            </Link>
+                        </DropdownMenuItem>
+                    </DropdownMenuContent>
+                </DropdownMenu>
 
                 <!-- Mobile / Tablet Menu Button -->
                 <Button
@@ -345,6 +404,7 @@ function formatTime(isoString: string | null): string {
         >
             <div class="flex flex-col gap-1">
                 <div
+                    v-if="hasLiveData"
                     class="mb-2 flex items-center justify-between border-b border-border/60 pb-2 text-xs text-muted-foreground"
                 >
                     <span class="flex items-center gap-1.5 font-mono">
@@ -361,11 +421,11 @@ function formatTime(isoString: string | null): string {
                         <template v-if="!isTabVisible"
                             >Auto-Sync Paused</template
                         >
-                        <template v-else-if="isRefreshing">Syncing...</template>
+                        <template v-else-if="isRefreshing">Loading…</template>
                         <template v-else>Auto-Sync: {{ countdown }}s</template>
                     </span>
                     <span class="font-mono"
-                        >Updated: {{ formatTime(lastUpdated) }}</span
+                        >Data as of: {{ formatTime(dataAsOf ?? null) }}</span
                     >
                 </div>
 
@@ -404,44 +464,61 @@ function formatTime(isoString: string | null): string {
 
                 <div class="my-1 border-t border-border/60"></div>
 
-                <Link
-                    href="/reports/create"
-                    class="flex items-center gap-2.5 rounded-lg bg-destructive px-3 py-2 text-sm font-semibold text-destructive-foreground shadow-sm"
-                    @click="mobileMenuOpen = false"
-                >
-                    <PlusCircle class="size-4 shrink-0" />
-                    <span>Report Disaster</span>
-                </Link>
+                <!-- Mobile guest actions -->
+                <div v-if="!authUser" class="grid gap-2 py-1 md:hidden">
+                    <Link
+                        :href="login()"
+                        data-test="mobile-login"
+                        class="inline-flex h-10 w-full items-center justify-center rounded-md border border-border bg-background text-sm font-medium text-foreground hover:bg-muted"
+                        @click="mobileMenuOpen = false"
+                    >
+                        Log in
+                    </Link>
+                    <Link
+                        :href="register()"
+                        data-test="mobile-register"
+                        class="inline-flex h-10 w-full items-center justify-center rounded-md bg-primary text-sm font-semibold text-primary-foreground hover:bg-primary/90"
+                        @click="mobileMenuOpen = false"
+                    >
+                        Register
+                    </Link>
+                </div>
 
-                <Link
-                    v-if="$page.props.auth?.user"
-                    href="/my-reports"
-                    :class="[
-                        'flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors',
-                        isItemActive('/my-reports')
-                            ? 'bg-destructive/10 font-semibold text-foreground'
-                            : 'font-medium text-muted-foreground hover:bg-muted hover:text-foreground',
-                    ]"
-                    @click="mobileMenuOpen = false"
-                >
-                    <ClipboardList class="size-4 shrink-0" />
-                    <span>My Reports</span>
-                </Link>
-
-                <Link
-                    v-if="$page.props.auth?.user?.role === 'admin'"
-                    href="/admin/reports"
-                    :class="[
-                        'flex items-center gap-2.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm font-semibold text-amber-600 transition-colors dark:text-amber-400',
-                        isItemActive('/admin/reports')
-                            ? 'ring-1 ring-amber-500'
-                            : '',
-                    ]"
-                    @click="mobileMenuOpen = false"
-                >
-                    <ShieldCheck class="size-4 shrink-0" />
-                    <span>Admin Review Panel</span>
-                </Link>
+                <!-- Mobile account section -->
+                <div v-else class="flex flex-col gap-1 md:hidden">
+                    <div class="px-3 py-1 text-xs text-muted-foreground">
+                        Signed in as
+                        <span class="font-medium text-foreground">{{
+                            authUser.name
+                        }}</span>
+                    </div>
+                    <Link
+                        :href="editProfile()"
+                        data-test="mobile-settings"
+                        class="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+                        @click="mobileMenuOpen = false"
+                    >
+                        <Settings class="size-4" /> Settings
+                    </Link>
+                    <Link
+                        v-if="isAdmin"
+                        href="/admin"
+                        data-test="mobile-admin"
+                        class="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+                        @click="mobileMenuOpen = false"
+                    >
+                        <LayoutDashboard class="size-4" /> Admin
+                    </Link>
+                    <Link
+                        :href="logout()"
+                        as="button"
+                        data-test="mobile-logout"
+                        class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+                        @click="handleLogout"
+                    >
+                        <LogOut class="size-4" /> Log out
+                    </Link>
+                </div>
 
                 <!-- Mobile Theme Toggle Row -->
                 <div

@@ -8,6 +8,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 uses(RefreshDatabase::class);
 
 beforeEach(function () {
+    config(['modules.coordination' => true]);
     $this->admin = User::factory()->create(['role' => 'admin']);
     $this->shelter = Shelter::create([
         'name' => 'Metro Manila Base Depot',

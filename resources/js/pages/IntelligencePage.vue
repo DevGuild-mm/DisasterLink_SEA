@@ -197,6 +197,7 @@ function getPriorityBadgeClass(tier: string): string {
     >
         <DisasterHeader
             :last-updated="dashboardData.generated_at"
+            :data-as-of="dashboardData.data_as_of"
             :is-refreshing="isDashboardRefreshing || isFiltering"
             :countdown="countdown"
             :is-tab-visible="isTabVisible"

@@ -208,6 +208,7 @@ const hasWeatherWarnings = computed(() => {
     >
         <DisasterHeader
             :last-updated="data.generated_at"
+            :data-as-of="data.data_as_of"
             :is-refreshing="isRefreshing"
             :countdown="countdown"
             :is-tab-visible="isTabVisible"
@@ -841,8 +842,7 @@ const hasWeatherWarnings = computed(() => {
                         <p
                             class="mx-auto max-w-md text-xs leading-relaxed text-muted-foreground"
                         >
-                            Continuous multi-source feeds from GDACS, USGS, and
-                            NASA EONET indicate zero unmanaged high or moderate
+                            Stored GDACS and USGS feeds indicate zero unmanaged high or moderate
                             natural hazard bulletins for
                             {{ countryData.country_meta.name }} at this time.
                         </p>

@@ -154,14 +154,16 @@ export interface CategoryOption {
 }
 
 export interface DashboardData {
+    /** When this page data was built from MySQL. */
     generated_at: string | null;
+    /** The last successful source sync (oldest of GDACS and USGS). */
+    data_as_of?: string | null;
     summary: DashboardSummary;
     events: DisasterEvent[];
     weather: WeatherCity[];
     sources: {
         gdacs: SourceFreshness;
         usgs: SourceFreshness;
-        eonet: SourceFreshness;
         weather: SourceFreshness;
     };
     countries: Record<string, AseanCountry>;
@@ -396,7 +398,6 @@ export interface CountryDashboardData {
     sources: {
         gdacs: SourceFreshness;
         usgs: SourceFreshness;
-        eonet: SourceFreshness;
         weather: SourceFreshness;
     };
 }
@@ -555,8 +556,8 @@ export interface CoordinationPayload {
     >;
     resources: EmergencyResourceItem[];
     routes: EvacuationRouteItem[];
-    rescue_requests: RescueRequestItem[];
-    volunteers: VolunteerItem[];
+    rescue_requests?: RescueRequestItem[];
+    volunteers?: VolunteerItem[];
     countries: Record<string, AseanCountry>;
     categories: Array<{ id: string; label: string; icon: string }>;
 }

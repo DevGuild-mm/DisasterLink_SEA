@@ -5,23 +5,23 @@ namespace App\Services\Disaster;
 use App\Models\EmergencyResource;
 use App\Models\EvacuationRoute;
 use App\Models\RescueRequest;
-use App\Models\ResourceDistribution;
 use App\Models\Shelter;
 use App\Models\Volunteer;
 use Carbon\Carbon;
 use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\Cache;
 
 class EmergencyCoordinationService
 {
     private const CACHE_KEY = 'emergency_coordination_summary';
+
     private const CACHE_TTL = 60; // 60 seconds
 
     /**
-     * Get complete coordination telemetry payload.
+     * Get the public coordination telemetry payload.
      *
-     * @param array<string, mixed> $filters
-     * @param bool $forceRefresh
+     * Personal data (rescue requests, volunteers) is deliberately excluded; only aggregate counts are exposed.
+     *
+     * @param  array<string, mixed>  $filters
      * @return array<string, mixed>
      */
     public function getCoordinationData(array $filters = [], bool $forceRefresh = false): array
@@ -65,22 +65,6 @@ class EmergencyCoordinationService
         }
         $routes = $routesQuery->get();
 
-        // Query Rescue Requests
-        $requestsQuery = RescueRequest::with('assignedVolunteer:id,name,phone')
-            ->orderByRaw("CASE urgency WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'moderate' THEN 3 ELSE 4 END")
-            ->latest('created_at');
-        if ($countryFilter !== null) {
-            $requestsQuery->where('country', $countryFilter);
-        }
-        $rescueRequests = $requestsQuery->get();
-
-        // Query Volunteers
-        $volunteersQuery = Volunteer::withCount('rescueRequests')->orderBy('availability_status')->orderBy('name');
-        if ($countryFilter !== null) {
-            $volunteersQuery->where('country', $countryFilter);
-        }
-        $volunteers = $volunteersQuery->get();
-
         // Compute Aggregated KPI Summary
         $allShelters = Shelter::all();
         $totalCapacity = (int) $allShelters->sum('total_capacity');
@@ -120,8 +104,6 @@ class EmergencyCoordinationService
             'map_locations' => $this->formatShelterLocationsForMap($shelters),
             'resources' => $resources,
             'routes' => $routes,
-            'rescue_requests' => $rescueRequests,
-            'volunteers' => $volunteers,
             'countries' => DisasterDashboardService::ASEAN_COUNTRIES,
             'categories' => [
                 ['id' => 'water_food', 'label' => 'Food & Potable Water', 'icon' => 'utensils'],
@@ -135,7 +117,7 @@ class EmergencyCoordinationService
     /**
      * Format shelter objects into map markers with full metadata for Leaflet.
      *
-     * @param Collection<int, Shelter> $shelters
+     * @param  Collection<int, Shelter>  $shelters
      * @return array<int, array<string, mixed>>
      */
     public function formatShelterLocationsForMap(Collection $shelters): array

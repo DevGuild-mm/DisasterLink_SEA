@@ -35,26 +35,4 @@ return [
         ],
     ],
 
-    'disaster_apis' => [
-        'timeout' => (int) env('DISASTER_API_TIMEOUT', 8),
-        'stale_ttl' => (int) env('DISASTER_API_STALE_TTL', 86400),
-        'gdacs' => [
-            'url' => env('GDACS_API_URL', 'https://www.gdacs.org/gdacsapi/api/events/geteventlist/SEARCH'),
-            'cache_ttl' => (int) env('GDACS_CACHE_TTL', 300),
-        ],
-        'usgs' => [
-            'hour_url' => env('USGS_HOUR_API_URL', 'https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson'),
-            'week_url' => env('USGS_WEEK_API_URL', 'https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_week.geojson'),
-            'cache_ttl' => (int) env('USGS_CACHE_TTL', 180),
-        ],
-        'eonet' => [
-            'url' => env('NASA_EONET_API_URL', 'https://eonet.gsfc.nasa.gov/api/v3/events'),
-            'cache_ttl' => (int) env('NASA_EONET_CACHE_TTL', 900),
-        ],
-        'open_meteo' => [
-            'url' => env('OPEN_METEO_API_URL', 'https://api.open-meteo.com/v1/forecast'),
-            'cache_ttl' => (int) env('OPEN_METEO_CACHE_TTL', 900),
-        ],
-    ],
-
 ];

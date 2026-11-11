@@ -146,7 +146,6 @@ const eventSources = computed<SourceFreshness[]>(() => {
     return [
         props.sources.gdacs,
         props.sources.usgs,
-        props.sources.eonet,
     ].filter((s): s is SourceFreshness => Boolean(s));
 });
 
@@ -1502,7 +1501,7 @@ onUnmounted(() => {
                     Upstream geospatial feeds are currently unavailable
                 </p>
                 <p class="mt-1 max-w-sm text-xs text-muted-foreground">
-                    Unable to reach GDACS, USGS, and NASA EONET. Map markers
+                    Unable to reach GDACS and USGS. Map markers
                     will populate automatically once connectivity is restored.
                 </p>
             </div>

@@ -21,13 +21,21 @@ class CreateNewUser implements CreatesNewUsers
     {
         Validator::make($input, [
             ...$this->profileRules(),
+            'country_id' => $this->countryRules(required: true),
+            'alerts_enabled' => $this->alertsEnabledRules(),
             'password' => $this->passwordRules(),
+        ], [
+            'country_id.required' => __('Please choose your country.'),
         ])->validate();
 
+        // Only the named fields are read, so extra input (a `role`, a verified date...) cannot reach the model.
+        // An absent `alerts_enabled` keeps the database default (true).
         return User::create([
             'name' => $input['name'],
             'email' => $input['email'],
             'password' => $input['password'],
+            'country_id' => (int) $input['country_id'],
+            'alerts_enabled' => array_key_exists('alerts_enabled', $input) ? (bool) $input['alerts_enabled'] : true,
         ]);
     }
 }

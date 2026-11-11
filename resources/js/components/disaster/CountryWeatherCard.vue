@@ -282,7 +282,7 @@ const primaryCity = computed(() => {
                                         primaryCity.forecast_precipitation_sum_mm !==
                                         null
                                             ? `${primaryCity.forecast_precipitation_sum_mm} mm`
-                                            : '0 mm'
+                                            : '—'
                                     }}
                                 </strong>
                             </div>

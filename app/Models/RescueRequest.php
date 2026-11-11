@@ -31,17 +31,25 @@ class RescueRequest extends Model
     use HasFactory;
 
     public const URGENCY_CRITICAL = 'critical';
+
     public const URGENCY_HIGH = 'high';
+
     public const URGENCY_MODERATE = 'moderate';
+
     public const URGENCY_LOW = 'low';
 
     public const STATUS_PENDING = 'pending';
+
     public const STATUS_DISPATCHED = 'dispatched';
+
     public const STATUS_IN_PROGRESS = 'in_progress';
+
     public const STATUS_COMPLETED = 'completed';
+
     public const STATUS_CANCELLED = 'cancelled';
 
     public $incrementing = false;
+
     protected $keyType = 'string';
 
     protected $fillable = [
@@ -62,6 +70,13 @@ class RescueRequest extends Model
         'resolution_notes',
     ];
 
+    /**
+     * Contact fields must never be serialized into public payloads.
+     *
+     * @var list<string>
+     */
+    protected $hidden = ['reporter_name', 'contact_phone'];
+
     protected function casts(): array
     {
         return [
@@ -76,7 +91,7 @@ class RescueRequest extends Model
     {
         static::creating(function (RescueRequest $request) {
             if (empty($request->id)) {
-                $request->id = 'rsc_' . strtolower((string) Str::ulid());
+                $request->id = 'rsc_'.strtolower((string) Str::ulid());
             }
         });
     }

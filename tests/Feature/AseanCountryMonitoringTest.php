@@ -1,98 +1,19 @@
 <?php
 
-use App\Models\DisasterReport;
-use App\Models\User;
-use App\Services\Disaster\DisasterDashboardService;
-use Carbon\Carbon;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\Http;
 
 beforeEach(function () {
+    config(['modules.countries' => true]);
     Cache::flush();
 });
 
 function fakeAseanTelemetry(): void
 {
-    Http::fake([
-        'www.gdacs.org/*' => Http::response([
-            'type' => 'FeatureCollection',
-            'features' => [
-                [
-                    'type' => 'Feature',
-                    'geometry' => [
-                        'type' => 'Point',
-                        'coordinates' => [125.5, 9.8],
-                    ],
-                    'properties' => [
-                        'eventid' => '1001',
-                        'episodeid' => '1',
-                        'eventtype' => 'EQ',
-                        'name' => 'Earthquake in Mindanao',
-                        'description' => 'Moderate earthquake in Mindanao, Philippines',
-                        'country' => 'Philippines',
-                        'iso3' => 'PHL',
-                        'alertlevel' => 'Orange',
-                        'fromdate' => Carbon::now()->subHours(2)->toIso8601String(),
-                        'severitydata' => [
-                            'severity' => 5.5,
-                            'severitytext' => 'Magnitude 5.5M',
-                            'severityunit' => 'M',
-                        ],
-                        'url' => [
-                            'report' => 'https://www.gdacs.org/report.aspx?eventid=1001',
-                        ],
-                    ],
-                ],
-                [
-                    'type' => 'Feature',
-                    'geometry' => [
-                        'type' => 'Point',
-                        'coordinates' => [106.8, -6.2],
-                    ],
-                    'properties' => [
-                        'eventid' => '1002',
-                        'episodeid' => '1',
-                        'eventtype' => 'FL',
-                        'name' => 'Flood in Jakarta',
-                        'description' => 'Inundation flood in Jakarta, Indonesia',
-                        'country' => 'Indonesia',
-                        'iso3' => 'IDN',
-                        'alertlevel' => 'Red',
-                        'fromdate' => Carbon::now()->subHours(4)->toIso8601String(),
-                        'severitydata' => [
-                            'severity' => 2.0,
-                            'severitytext' => 'Red Flood Alert',
-                            'severityunit' => 'Alert',
-                        ],
-                        'url' => [
-                            'report' => 'https://www.gdacs.org/report.aspx?eventid=1002',
-                        ],
-                    ],
-                ],
-            ],
-        ]),
-        'earthquake.usgs.gov/*' => Http::response(['type' => 'FeatureCollection', 'features' => []]),
-        'eonet.gsfc.nasa.gov/*' => Http::response(['events' => []]),
-        'api.open-meteo.com/*' => Http::response(array_map(fn () => [
-            'current' => [
-                'time' => '2026-11-08T06:00',
-                'temperature_2m' => 28.5,
-                'apparent_temperature' => 31.2,
-                'relative_humidity_2m' => 80,
-                'precipitation' => 0.0,
-                'weather_code' => 1,
-                'wind_speed_10m' => 12.0,
-                'wind_direction_10m' => 180,
-                'is_day' => 1,
-            ],
-            'daily' => [
-                'time' => ['2026-11-08'],
-                'temperature_2m_max' => [32.0],
-                'temperature_2m_min' => [25.0],
-                'precipitation_sum' => [1.5],
-            ],
-        ], range(1, 11))),
+    seedDashboardData([
+        ['iso3' => 'PHL', 'external_id' => 'EQ:1001', 'event_type' => 'earthquake', 'title' => 'Earthquake in Mindanao', 'alert_level' => 'Orange', 'magnitude' => 5.5, 'latitude' => 9.8, 'longitude' => 125.5],
+        ['iso3' => 'IDN', 'external_id' => 'FL:1002', 'event_type' => 'flood', 'title' => 'Flood in Jakarta', 'alert_level' => 'Red', 'latitude' => -6.2, 'longitude' => 106.8],
     ]);
+    markSourcesSynced();
 }
 
 test('1. default country monitoring page renders All Southeast Asia', function () {

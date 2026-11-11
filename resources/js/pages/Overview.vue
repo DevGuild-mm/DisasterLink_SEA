@@ -2,7 +2,6 @@
 import { Head, Link, router } from '@inertiajs/vue3';
 import {
     AlertTriangle,
-    BellRing,
     Globe,
     RefreshCw,
     ShieldAlert,
@@ -43,6 +42,7 @@ const {
     >
         <DisasterHeader
             :last-updated="data.generated_at"
+            :data-as-of="data.data_as_of"
             :is-refreshing="isRefreshing"
             :countdown="countdown"
             :is-tab-visible="isTabVisible"
@@ -105,19 +105,11 @@ const {
                         <p
                             class="mt-1 text-xs text-muted-foreground sm:text-sm"
                         >
-                            Calculated from real-time feeds across GDACS, USGS,
-                            and NASA EONET.
+                            Calculated from stored GDACS and USGS events.
                         </p>
                     </div>
 
                     <div class="flex flex-wrap items-center gap-2">
-                        <Link
-                            href="/intelligence"
-                            class="inline-flex h-9 items-center gap-1.5 rounded-lg bg-destructive px-3.5 text-xs font-semibold text-destructive-foreground hover:bg-destructive/90"
-                        >
-                            <BellRing class="size-3.5" />
-                            <span>Early Warnings</span>
-                        </Link>
                         <Link
                             href="/map"
                             class="inline-flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3.5 text-xs font-semibold text-primary-foreground hover:bg-primary/90"

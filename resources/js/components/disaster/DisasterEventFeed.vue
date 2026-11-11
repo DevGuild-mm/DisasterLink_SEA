@@ -121,7 +121,6 @@ const eventSources = computed<SourceFreshness[]>(() => {
     return [
         props.sources.gdacs,
         props.sources.usgs,
-        props.sources.eonet,
     ].filter((s): s is SourceFreshness => Boolean(s));
 });
 
@@ -318,8 +317,7 @@ function getCategoryColor(cat: string) {
                         Latest Disaster Events & Bulletins
                     </h2>
                     <p class="mt-0.5 text-xs text-muted-foreground">
-                        Sorted newest first • Verified reports from GDACS, USGS,
-                        and NASA EONET
+                        Sorted newest first • Stored reports from GDACS and USGS
                     </p>
                 </div>
 
@@ -533,8 +531,8 @@ function getCategoryColor(cat: string) {
                     Synchronizing real-time disaster feeds...
                 </h3>
                 <p class="mx-auto mt-1 max-w-md text-xs text-muted-foreground">
-                    Querying GDACS, USGS Earthquake Hazards, and NASA EONET for
-                    Southeast Asia incidents.
+                    Waiting for the first GDACS and USGS sync of Southeast Asia
+                    incidents.
                 </p>
             </div>
 
@@ -552,9 +550,9 @@ function getCategoryColor(cat: string) {
                     Upstream disaster feeds are currently unavailable
                 </h3>
                 <p class="mx-auto mt-1 max-w-md text-xs text-muted-foreground">
-                    Could not retrieve live or cached event data from GDACS,
-                    USGS, or NASA EONET. DisasterLinkSEA never displays fake or
-                    fabricated events when upstream providers are offline.
+                    No stored event data is available from GDACS or USGS.
+                    DisasterLinkSEA never displays fake or fabricated events
+                    when upstream providers are offline.
                 </p>
             </div>
 

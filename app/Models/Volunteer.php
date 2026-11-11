@@ -26,10 +26,13 @@ class Volunteer extends Model
     use HasFactory;
 
     public const STATUS_AVAILABLE = 'available';
+
     public const STATUS_DEPLOYED = 'deployed';
+
     public const STATUS_STANDBY = 'standby';
 
     public $incrementing = false;
+
     protected $keyType = 'string';
 
     protected $fillable = [
@@ -45,6 +48,13 @@ class Volunteer extends Model
         'notes',
     ];
 
+    /**
+     * Contact fields must never be serialized into public payloads.
+     *
+     * @var list<string>
+     */
+    protected $hidden = ['email', 'phone'];
+
     protected function casts(): array
     {
         return [
@@ -56,7 +66,7 @@ class Volunteer extends Model
     {
         static::creating(function (Volunteer $vol) {
             if (empty($vol->id)) {
-                $vol->id = 'vol_' . strtolower((string) Str::ulid());
+                $vol->id = 'vol_'.strtolower((string) Str::ulid());
             }
         });
     }

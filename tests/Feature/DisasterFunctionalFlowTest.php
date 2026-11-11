@@ -4,68 +4,18 @@ use App\Models\DisasterReport;
 use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\Http;
 
 beforeEach(function () {
+    config(['modules.countries' => true, 'modules.intelligence' => true, 'modules.coordination' => true, 'modules.reports' => true]);
     Cache::flush();
 });
 
 function fakeFullTelemetry(): void
 {
-    Http::fake([
-        'www.gdacs.org/*' => Http::response([
-            'type' => 'FeatureCollection',
-            'features' => [
-                [
-                    'type' => 'Feature',
-                    'geometry' => [
-                        'type' => 'Point',
-                        'coordinates' => [121.0, 14.6],
-                    ],
-                    'properties' => [
-                        'eventid' => '2001',
-                        'episodeid' => '1',
-                        'eventtype' => 'TC',
-                        'name' => 'Tropical Cyclone in Luzon',
-                        'description' => 'Severe tropical cyclone warning for Luzon, Philippines',
-                        'country' => 'Philippines',
-                        'iso3' => 'PHL',
-                        'alertlevel' => 'Red',
-                        'fromdate' => Carbon::now()->subHours(1)->toIso8601String(),
-                        'severitydata' => [
-                            'severity' => 3.0,
-                            'severitytext' => 'Cat 3 Typhoon',
-                            'severityunit' => 'Cat',
-                        ],
-                        'url' => [
-                            'report' => 'https://www.gdacs.org/report.aspx?eventid=2001',
-                        ],
-                    ],
-                ],
-            ],
-        ]),
-        'earthquake.usgs.gov/*' => Http::response(['type' => 'FeatureCollection', 'features' => []]),
-        'eonet.gsfc.nasa.gov/*' => Http::response(['events' => []]),
-        'api.open-meteo.com/*' => Http::response(array_map(fn () => [
-            'current' => [
-                'time' => '2026-11-08T06:00',
-                'temperature_2m' => 28.5,
-                'apparent_temperature' => 31.2,
-                'relative_humidity_2m' => 80,
-                'precipitation' => 0.0,
-                'weather_code' => 1,
-                'wind_speed_10m' => 12.0,
-                'wind_direction_10m' => 180,
-                'is_day' => 1,
-            ],
-            'daily' => [
-                'time' => ['2026-11-08'],
-                'temperature_2m_max' => [32.0],
-                'temperature_2m_min' => [25.0],
-                'precipitation_sum' => [1.5],
-            ],
-        ], range(1, 11))),
+    seedDashboardData([
+        ['iso3' => 'PHL', 'external_id' => 'TC:2001', 'event_type' => 'cyclone', 'title' => 'Tropical Cyclone in Luzon', 'alert_level' => 'Red', 'latitude' => 14.6, 'longitude' => 121.0],
     ]);
+    markSourcesSynced();
 }
 
 test('1. overview page renders successfully with initial telemetry', function () {
@@ -110,13 +60,13 @@ test('3. live events feed page renders with filter options', function () {
 test('4. event detail page resolves existing event and displays specifications', function () {
     fakeFullTelemetry();
 
-    $response = $this->get('/events/2001');
+    $response = $this->get('/events/gdacs_TC:2001');
 
     $response->assertOk();
     $response->assertInertia(fn ($page) => $page
         ->component('EventDetailPage')
-        ->where('eventId', '2001')
-        ->where('event.source_id', '2001')
+        ->where('eventId', 'gdacs_TC:2001')
+        ->where('event.source_id', 'TC:2001')
         ->where('event.country', 'Philippines')
         ->has('event.timeline')
     );
@@ -134,19 +84,15 @@ test('5. weather page renders all ASEAN capital city observations', function () 
     );
 });
 
-test('6. data freshness page renders provider connectivity statuses', function () {
+test('6. the public data freshness page is gone; its diagnostics are admin-only', function () {
     fakeFullTelemetry();
 
-    $response = $this->get('/freshness');
+    $this->get('/freshness')->assertNotFound();
 
-    $response->assertOk();
-    $response->assertInertia(fn ($page) => $page
-        ->component('FreshnessPage')
-        ->has('initialDashboardData.sources.gdacs')
-        ->has('initialDashboardData.sources.usgs')
-        ->has('initialDashboardData.sources.eonet')
-        ->has('initialDashboardData.sources.weather')
-    );
+    // The public payload still carries the plain source status the pages show.
+    $this->getJson('/api/disaster-dashboard')
+        ->assertOk()
+        ->assertJsonStructure(['sources' => ['gdacs', 'usgs', 'weather']]);
 });
 
 test('7. disaster report input sanitization strips XSS and malicious HTML tags', function () {

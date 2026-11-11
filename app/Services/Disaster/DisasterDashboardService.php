@@ -2,9 +2,8 @@
 
 namespace App\Services\Disaster;
 
-use App\Models\DisasterReport;
+use App\Services\Disaster\Dashboard\DashboardQueryService;
 use Carbon\Carbon;
-use Illuminate\Support\Facades\Cache;
 use Throwable;
 
 class DisasterDashboardService
@@ -109,80 +108,18 @@ class DisasterDashboardService
     ];
 
     public function __construct(
-        protected GdacsService $gdacsService,
-        protected UsgsService $usgsService,
-        protected NasaEonetService $eonetService,
-        protected OpenMeteoService $openMeteoService,
-    ) {
-    }
+        protected DashboardQueryService $queries,
+    ) {}
 
     /**
-     * Retrieve the aggregated real-time disaster dashboard data.
-     * Each source service manages its own fresh cache TTL and 24-hour stale fallback cache.
+     * The dashboard payload, read from MySQL through the cache. Never contacts GDACS, USGS or Open-Meteo.
      *
+     * @param  bool  $reload  rebuild from MySQL now (the public "Reload data")
      * @return array<string, mixed>
      */
-    public function getDashboardData(bool $forceRefresh = false): array
+    public function getDashboardData(bool $reload = false): array
     {
-        $gdacs = $this->gdacsService->getEvents($forceRefresh);
-        $usgs = $this->usgsService->getEvents($forceRefresh);
-        $eonet = $this->eonetService->getEvents($forceRefresh);
-        $weather = $this->openMeteoService->getWeather($forceRefresh);
-
-        // Deduplicate and merge events across agencies
-        $allEvents = array_merge($gdacs['events'], $usgs['events'], $eonet['events']);
-        $deduplicatedEvents = $this->deduplicateEvents($allEvents);
-
-        // Fetch verified community reports (never unverified/pending/rejected)
-        try {
-            $communityReports = DisasterReport::with('user:id,name')
-                ->where('status', DisasterReport::STATUS_VERIFIED)
-                ->get()
-                ->map(fn (DisasterReport $report) => $report->toDisasterEvent())
-                ->toArray();
-        } catch (Throwable) {
-            $communityReports = [];
-        }
-
-        // Merge verified community reports without polluting official provider data
-        $mergedEvents = array_merge($deduplicatedEvents, $communityReports);
-
-        // Sort events chronologically DESC (newest first)
-        usort($mergedEvents, function ($a, $b) {
-            return strcmp($b['event_time'] ?? '', $a['event_time'] ?? '');
-        });
-
-        // Compute summary counts from actual verified events
-        $summary = $this->calculateSummary($mergedEvents, [
-            'gdacs' => $gdacs['meta'],
-            'usgs' => $usgs['meta'],
-            'eonet' => $eonet['meta'],
-            'weather' => $weather['meta'],
-        ]);
-
-        return [
-            'generated_at' => Carbon::now()->toIso8601String(),
-            'summary' => $summary,
-            'events' => $mergedEvents,
-            'weather' => $weather['weather'],
-            'sources' => [
-                'gdacs' => $gdacs['meta'],
-                'usgs' => $usgs['meta'],
-                'eonet' => $eonet['meta'],
-                'weather' => $weather['meta'],
-            ],
-            'countries' => self::ASEAN_COUNTRIES,
-            'categories' => [
-                ['id' => 'all', 'label' => 'All Categories', 'icon' => 'globe'],
-                ['id' => 'earthquake', 'label' => 'Earthquakes', 'icon' => 'activity'],
-                ['id' => 'cyclone', 'label' => 'Tropical Cyclones', 'icon' => 'wind'],
-                ['id' => 'flood', 'label' => 'Floods', 'icon' => 'waves'],
-                ['id' => 'wildfire', 'label' => 'Wildfires', 'icon' => 'flame'],
-                ['id' => 'volcano', 'label' => 'Volcanoes', 'icon' => 'triangle-alert'],
-                ['id' => 'storm', 'label' => 'Severe Storms', 'icon' => 'cloud-lightning'],
-                ['id' => 'other', 'label' => 'Other Incidents', 'icon' => 'alert-circle'],
-            ],
-        ];
+        return $this->queries->dashboard($reload);
     }
 
     /**
@@ -234,30 +171,13 @@ class DisasterDashboardService
         return null;
     }
 
-    /**
-     * Retrieve aggregated country-level disaster telemetry, KPI metrics, analytics, and capital weather.
-     * Caches country-specific results for 5 minutes.
-     *
-     * @return array<string, mixed>
-     */
-    public function getCountryDashboardData(?string $country = null, bool $forceRefresh = false): array
+    public function getCountryDashboardData(?string $country = null, bool $reload = false): array
     {
         $resolvedKey = $this->resolveAseanCountryKey($country);
         $isValidCountry = $resolvedKey !== null;
         $countryKey = $resolvedKey ?? 'All';
 
-        $cacheKey = 'disaster_country_dashboard_' . strtolower(str_replace(['-', '_', ' '], '', $countryKey));
-
-        if (!$forceRefresh && Cache::has($cacheKey)) {
-            /** @var array<string, mixed> $cached */
-            $cached = Cache::get($cacheKey);
-            $cached['requested_country'] = $country;
-            $cached['is_valid_country'] = $isValidCountry;
-
-            return $cached;
-        }
-
-        $dashboardData = $this->getDashboardData($forceRefresh);
+        $dashboardData = $this->getDashboardData($reload);
 
         // Filter events by country
         if ($countryKey === 'All') {
@@ -303,7 +223,7 @@ class DisasterDashboardService
         $byCategoryMap = [];
         foreach ($countryEvents as $e) {
             $cat = (string) ($e['category'] ?? $e['disaster_type'] ?? 'Other');
-            if (!isset($byCategoryMap[$cat])) {
+            if (! isset($byCategoryMap[$cat])) {
                 $byCategoryMap[$cat] = [
                     'category' => $cat,
                     'total_events' => 0,
@@ -398,15 +318,13 @@ class DisasterDashboardService
             'sources' => $dashboardData['sources'],
         ];
 
-        Cache::put($cacheKey, $result, 300);
-
         return $result;
     }
 
     /**
      * Group verified events by date without inventing days or missing data.
      *
-     * @param array<int, array<string, mixed>> $events
+     * @param  array<int, array<string, mixed>>  $events
      * @return array<int, array<string, mixed>>
      */
     private function calculateHistoricalTrends(array $events): array
@@ -415,7 +333,7 @@ class DisasterDashboardService
 
         foreach ($events as $event) {
             $rawTime = $event['event_date'] ?? $event['event_time'] ?? null;
-            if (!$rawTime) {
+            if (! $rawTime) {
                 continue;
             }
 
@@ -426,7 +344,7 @@ class DisasterDashboardService
                 continue;
             }
 
-            if (!isset($groups[$dateKey])) {
+            if (! isset($groups[$dateKey])) {
                 $groups[$dateKey] = [
                     'date' => $dateKey,
                     'formatted_date' => $formatted,
@@ -455,40 +373,19 @@ class DisasterDashboardService
     }
 
     /**
-     * Retrieve an individual disaster event by its ID or source ID, enriched with timeline updates.
-     *
      * @return array<string, mixed>|null
      */
-    public function getEventById(string $id, bool $forceRefresh = false): ?array
+    public function getEventById(string $id): ?array
     {
         $id = trim($id);
         if ($id === '') {
             return null;
         }
 
-        $dashboardData = $this->getDashboardData($forceRefresh);
-        foreach ($dashboardData['events'] as $event) {
-            if (
-                ($event['id'] ?? '') === $id ||
-                ($event['source_id'] ?? '') === $id ||
-                strcasecmp((string) ($event['id'] ?? ''), $id) === 0
-            ) {
-                return $this->enrichEventWithTimeline($event);
-            }
-        }
+        $event = $this->queries->eventById($id);
 
-        // Try fresh telemetry once if not forced yet and event was not in cache
-        if (!$forceRefresh) {
-            $dashboardData = $this->getDashboardData(true);
-            foreach ($dashboardData['events'] as $event) {
-                if (
-                    ($event['id'] ?? '') === $id ||
-                    ($event['source_id'] ?? '') === $id ||
-                    strcasecmp((string) ($event['id'] ?? ''), $id) === 0
-                ) {
-                    return $this->enrichEventWithTimeline($event);
-                }
-            }
+        if ($event !== null) {
+            return $this->enrichEventWithTimeline($event);
         }
 
         return null;
@@ -498,12 +395,12 @@ class DisasterDashboardService
      * Build a chronological timeline of verified updates for an event.
      * Never invents dates or events. If timeline data is unavailable, returns an empty array.
      *
-     * @param array<string, mixed> $event
+     * @param  array<string, mixed>  $event
      * @return array<string, mixed>
      */
     public function enrichEventWithTimeline(array $event): array
     {
-        if (!empty($event['is_community_report'])) {
+        if (! empty($event['is_community_report'])) {
             return $event;
         }
 
@@ -516,15 +413,15 @@ class DisasterDashboardService
             $sourceName = $event['source'] ?? 'Official Alert Feed';
             $category = $event['category'] ?? $event['disaster_type'] ?? 'Disaster';
             $title = "Initial {$category} Detection";
-            if (!empty($event['magnitude'])) {
-                $desc = "Preliminary {$category} registered with magnitude M " . number_format($event['magnitude'], 1) . " by {$sourceName}.";
-            } elseif (!empty($event['severity'])) {
+            if (! empty($event['magnitude'])) {
+                $desc = "Preliminary {$category} registered with magnitude M ".number_format($event['magnitude'], 1)." by {$sourceName}.";
+            } elseif (! empty($event['severity'])) {
                 $desc = "Initial incident advisory issued by {$sourceName} ({$event['severity']}).";
             } else {
                 $desc = "First recorded incident bulletin received from {$sourceName}.";
             }
 
-            $key = $initialTime . '_' . $sourceName;
+            $key = $initialTime.'_'.$sourceName;
             $timeline[] = [
                 'timestamp' => $initialTime,
                 'title' => $title,
@@ -535,42 +432,13 @@ class DisasterDashboardService
             $seenKeys[$key] = true;
         }
 
-        // 2. Multi-source observations (if NASA EONET provided multiple geometry entries)
-        if (!empty($event['observations']) && is_array($event['observations'])) {
-            foreach ($event['observations'] as $obs) {
-                $obsDate = $obs['date'] ?? null;
-                if ($obsDate !== null) {
-                    try {
-                        $iso = Carbon::parse($obsDate)->toIso8601String();
-                        $key = $iso . '_NASA EONET_obs';
-                        if (!isset($seenKeys[$key]) && $iso !== $initialTime) {
-                            $desc = 'Satellite imagery observation recorded by NASA EONET sensors.';
-                            if (!empty($obs['magnitude']) && !empty($obs['unit'])) {
-                                $desc .= " Measured intensity: {$obs['magnitude']} {$obs['unit']}.";
-                            }
-                            $timeline[] = [
-                                'timestamp' => $iso,
-                                'title' => 'Satellite Sensor Observation',
-                                'description' => $desc,
-                                'source' => 'NASA EONET',
-                                'type' => 'observation',
-                            ];
-                            $seenKeys[$key] = true;
-                        }
-                    } catch (Throwable) {
-                        // Skip unparseable dates
-                    }
-                }
-            }
-        }
-
-        // 3. Multi-source bulletins (if cross-corroborated across GDACS, USGS, or NASA)
+        // 2. Multi-source bulletins (an event reported by both GDACS and USGS)
         $sources = $event['sources'] ?? [$event['source']];
         if (count($sources) > 1) {
             foreach ($sources as $secSource) {
                 if ($secSource !== $event['source']) {
-                    $key = ($event['event_time'] ?? '') . '_' . $secSource;
-                    if (!isset($seenKeys[$key])) {
+                    $key = ($event['event_time'] ?? '').'_'.$secSource;
+                    if (! isset($seenKeys[$key])) {
                         $timeline[] = [
                             'timestamp' => $event['event_time'] ?? $initialTime,
                             'title' => "Cross-Agency Verification ({$secSource})",
@@ -584,11 +452,11 @@ class DisasterDashboardService
             }
         }
 
-        // 4. Last updated / revision time
+        // 3. Last updated / revision time
         $updatedTime = $event['last_updated_time'] ?? null;
         if ($updatedTime !== null && $updatedTime !== $initialTime) {
-            $key = $updatedTime . '_update';
-            if (!isset($seenKeys[$key])) {
+            $key = $updatedTime.'_update';
+            if (! isset($seenKeys[$key])) {
                 $sourceName = $event['source'] ?? 'Official Agency';
                 $timeline[] = [
                     'timestamp' => $updatedTime,
@@ -609,306 +477,5 @@ class DisasterDashboardService
         $event['timeline'] = $timeline;
 
         return $event;
-    }
-
-    /**
-     * Deduplicate events reported across multiple agencies (e.g., USGS and GDACS both reporting an earthquake).
-     *
-     * @param array<int, array<string, mixed>> $events
-     * @return array<int, array<string, mixed>>
-     */
-    private function deduplicateEvents(array $events): array
-    {
-        /** @var array<int, array<string, mixed>> $unique */
-        $unique = [];
-
-        foreach ($events as $event) {
-            $isDuplicate = false;
-
-            foreach ($unique as $index => $existing) {
-                if ($this->isSameIncident($event, $existing)) {
-                    $unique[$index] = $this->mergeIncidentData($existing, $event);
-                    $isDuplicate = true;
-                    break;
-                }
-            }
-
-            if (!$isDuplicate) {
-                if (!isset($event['disaster_type'])) {
-                    $event['disaster_type'] = $event['category'] ?? 'Other Disaster';
-                }
-                if (!isset($event['event_date'])) {
-                    $event['event_date'] = $event['event_time'] ?? null;
-                }
-                if (!isset($event['location'])) {
-                    $event['location'] = $event['country'] ?? null;
-                }
-                if (!isset($event['severity'])) {
-                    $event['severity'] = $event['severity_text'] ?? $event['severity_level'] ?? null;
-                }
-                if (!isset($event['last_updated_time'])) {
-                    $event['last_updated_time'] = null;
-                }
-                if (!isset($event['sources'])) {
-                    $event['sources'] = [$event['source']];
-                }
-                if (!isset($event['source_urls'])) {
-                    $event['source_urls'] = [
-                        [
-                            'source' => $event['source'],
-                            'url' => $event['source_url'],
-                        ],
-                    ];
-                }
-                $unique[] = $event;
-            }
-        }
-
-        return $unique;
-    }
-
-    /**
-     * Determine if two events describe the same physical incident.
-     *
-     * @param array<string, mixed> $a
-     * @param array<string, mixed> $b
-     */
-    private function isSameIncident(array $a, array $b): bool
-    {
-        // Exact ID or (source + source_id) match
-        if (!empty($a['id']) && !empty($b['id']) && $a['id'] === $b['id']) {
-            return true;
-        }
-        if (
-            !empty($a['source']) &&
-            !empty($b['source']) &&
-            $a['source'] === $b['source'] &&
-            !empty($a['source_id']) &&
-            !empty($b['source_id']) &&
-            $a['source_id'] === $b['source_id']
-        ) {
-            return true;
-        }
-
-        // Must be compatible disaster category
-        $catA = strtolower((string) ($a['category'] ?? $a['disaster_type'] ?? ''));
-        $catB = strtolower((string) ($b['category'] ?? $b['disaster_type'] ?? ''));
-        $isStormPair = in_array($catA, ['tropical cyclone', 'severe storm'], true)
-            && in_array($catB, ['tropical cyclone', 'severe storm'], true);
-
-        if ($catA !== $catB && !$isStormPair) {
-            return false;
-        }
-
-        // Coordinates check
-        $latA = $a['latitude'] ?? null;
-        $lngA = $a['longitude'] ?? null;
-        $latB = $b['latitude'] ?? null;
-        $lngB = $b['longitude'] ?? null;
-
-        if ($latA === null || $lngA === null || $latB === null || $lngB === null) {
-            return false;
-        }
-
-        $distanceKm = $this->haversineDistance((float) $latA, (float) $lngA, (float) $latB, (float) $lngB);
-
-        // Time difference check
-        $timeA = $a['event_time'] ?? $a['event_date'] ?? null;
-        $timeB = $b['event_time'] ?? $b['event_date'] ?? null;
-        if ($timeA && $timeB) {
-            try {
-                $diffMinutes = abs(Carbon::parse($timeA)->diffInMinutes(Carbon::parse($timeB)));
-                if ($catA === 'earthquake') {
-                    // Earthquakes: within 80km and within 90 minutes
-                    return $distanceKm <= 80 && $diffMinutes <= 90;
-                }
-
-                // Cyclones/Floods/Storms/Wildfires: within 100km and within 48 hours
-                return $distanceKm <= 100 && $diffMinutes <= 2880;
-            } catch (Throwable) {
-                // Ignore parse errors
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * Merge complementary data from two matching incident reports.
-     *
-     * @param array<string, mixed> $primary
-     * @param array<string, mixed> $secondary
-     * @return array<string, mixed>
-     */
-    private function mergeIncidentData(array $primary, array $secondary): array
-    {
-        $merged = $primary;
-
-        // Merge sources list
-        $sources = $primary['sources'] ?? [$primary['source']];
-        if (!in_array($secondary['source'], $sources, true)) {
-            $sources[] = $secondary['source'];
-        }
-        $merged['sources'] = $sources;
-
-        // Merge source URLs
-        $urls = $primary['source_urls'] ?? [['source' => $primary['source'], 'url' => $primary['source_url']]];
-        $exists = false;
-        foreach ($urls as $u) {
-            if ($u['source'] === $secondary['source']) {
-                $exists = true;
-                break;
-            }
-        }
-        if (!$exists) {
-            $urls[] = ['source' => $secondary['source'], 'url' => $secondary['source_url']];
-        }
-        $merged['source_urls'] = $urls;
-
-        // Prefer higher severity level when supplied
-        $severityOrder = ['Red' => 3, 'Orange' => 2, 'Green' => 1];
-        $sevPrimary = $primary['severity_level'] ?? null;
-        $sevSecondary = $secondary['severity_level'] ?? null;
-
-        if (($severityOrder[$sevSecondary ?? ''] ?? 0) > ($severityOrder[$sevPrimary ?? ''] ?? 0)) {
-            $merged['severity_level'] = $secondary['severity_level'];
-            $merged['severity_text'] = $secondary['severity_text'] ?? $merged['severity_text'];
-            $merged['severity'] = $secondary['severity'] ?? $merged['severity'];
-        }
-
-        // Fill missing values from secondary report without overwriting verified fields
-        foreach (['depth_km', 'magnitude', 'country', 'location', 'iso3', 'description', 'severity', 'severity_text', 'observations'] as $field) {
-            if (empty($merged[$field]) && !empty($secondary[$field])) {
-                $merged[$field] = $secondary[$field];
-            }
-        }
-
-        // Prefer more specific location over generic country name
-        if (
-            !empty($secondary['location']) &&
-            ($merged['location'] === $merged['country'] || $merged['location'] === 'Southeast Asia')
-        ) {
-            $merged['location'] = $secondary['location'];
-        }
-
-        // Keep newest last_updated_time
-        $updPrimary = $merged['last_updated_time'] ?? null;
-        $updSecondary = $secondary['last_updated_time'] ?? null;
-        if ($updSecondary !== null && ($updPrimary === null || $updSecondary > $updPrimary)) {
-            $merged['last_updated_time'] = $updSecondary;
-        }
-
-        return $merged;
-    }
-
-    /**
-     * Calculate summary statistics from real active data.
-     *
-     * @param array<int, array<string, mixed>> $events
-     * @param array<string, array<string, mixed>> $sourceMetas
-     * @return array<string, mixed>
-     */
-    private function calculateSummary(array $events, array $sourceMetas): array
-    {
-        $activeAlerts = 0;
-        $earthquakes = 0;
-        $cyclones = 0;
-        $floods = 0;
-        $wildfires = 0;
-        $volcanoes = 0;
-
-        foreach ($events as $ev) {
-            $cat = strtolower((string) ($ev['category'] ?? $ev['disaster_type'] ?? ''));
-            $sev = $ev['severity_level'] ?? null;
-
-            if (in_array($sev, ['Orange', 'Red'], true)) {
-                $activeAlerts++;
-            }
-
-            match ($cat) {
-                'earthquake' => $earthquakes++,
-                'tropical cyclone', 'severe storm' => $cyclones++,
-                'flood' => $floods++,
-                'wildfire' => $wildfires++,
-                'volcano' => $volcanoes++,
-                default => null,
-            };
-        }
-
-        // Source availability flags
-        $gdacsStatus = $sourceMetas['gdacs']['status'] ?? 'Unavailable';
-        $usgsStatus = $sourceMetas['usgs']['status'] ?? 'Unavailable';
-        $eonetStatus = $sourceMetas['eonet']['status'] ?? 'Unavailable';
-
-        $resolveGroupStatus = static function (array $statuses): string {
-            $allUnavailable = true;
-            $anyLive = false;
-            foreach ($statuses as $st) {
-                if ($st !== 'Unavailable') {
-                    $allUnavailable = false;
-                }
-                if ($st === 'Live') {
-                    $anyLive = true;
-                }
-            }
-
-            if ($allUnavailable) {
-                return 'Unavailable';
-            }
-
-            return $anyLive ? 'Active' : 'Stale';
-        };
-
-        return [
-            'total_active_alerts' => [
-                'count' => $activeAlerts,
-                'status' => $resolveGroupStatus([$gdacsStatus, $usgsStatus]),
-                'description' => 'Orange & Red Alert incidents requiring urgent regional attention',
-            ],
-            'earthquakes' => [
-                'count' => $earthquakes,
-                'status' => $resolveGroupStatus([$usgsStatus, $gdacsStatus]),
-                'description' => 'Real-time seismic events registered in Southeast Asia',
-            ],
-            'tropical_cyclones' => [
-                'count' => $cyclones,
-                'status' => $resolveGroupStatus([$gdacsStatus, $eonetStatus]),
-                'description' => 'Tracked tropical depressions, storms, and typhoons',
-            ],
-            'floods' => [
-                'count' => $floods,
-                'status' => $resolveGroupStatus([$gdacsStatus, $eonetStatus]),
-                'description' => 'Riverine & flash flood events reported in the region',
-            ],
-            'wildfires' => [
-                'count' => $wildfires,
-                'status' => $resolveGroupStatus([$eonetStatus, $gdacsStatus]),
-                'description' => 'Thermal hotspots & forest fires tracked via satellite telemetry',
-            ],
-            'volcanoes' => [
-                'count' => $volcanoes,
-                'status' => $resolveGroupStatus([$eonetStatus, $gdacsStatus]),
-                'description' => 'Volcanic activity & ash cloud warnings',
-            ],
-            'total_events' => count($events),
-        ];
-    }
-
-    /**
-     * Compute Haversine distance in kilometers between two lat/lng coordinates.
-     */
-    private function haversineDistance(float $lat1, float $lng1, float $lat2, float $lng2): float
-    {
-        $earthRadius = 6371; // km
-        $dLat = deg2rad($lat2 - $lat1);
-        $dLng = deg2rad($lng2 - $lng1);
-
-        $a = sin($dLat / 2) * sin($dLat / 2) +
-            cos(deg2rad($lat1)) * cos(deg2rad($lat2)) *
-            sin($dLng / 2) * sin($dLng / 2);
-
-        $c = 2 * atan2(sqrt($a), sqrt(1 - $a));
-
-        return $earthRadius * $c;
     }
 }

@@ -4,6 +4,7 @@ import type { DashboardData, SourceFreshness } from '@/types/disaster';
 
 const DEFAULT_DASHBOARD_DATA: DashboardData = {
     generated_at: null,
+    data_as_of: null,
     summary: {
         total_active_alerts: {
             count: 0,
@@ -67,12 +68,12 @@ const DEFAULT_DASHBOARD_DATA: DashboardData = {
             name: 'Global Disaster Alert and Coordination System (UN / EC JRC)',
             status: 'Unavailable',
             freshness_status: 'Unavailable',
-            connection_status: 'Awaiting telemetry sync',
+            connection_status: 'Never synced',
             last_successful_fetch: null,
             latest_event_time: null,
             cache_ttl_seconds: 300,
             provider_update_frequency:
-                'Every 5–15 minutes (event-driven bulletins)',
+                'Every 15 minutes (scheduled sync)',
             frontend_poll_interval_seconds: 60,
             is_fresh: false,
             is_stale: false,
@@ -84,45 +85,29 @@ const DEFAULT_DASHBOARD_DATA: DashboardData = {
             name: 'United States Geological Survey (Earthquake Hazards Program)',
             status: 'Unavailable',
             freshness_status: 'Unavailable',
-            connection_status: 'Awaiting telemetry sync',
+            connection_status: 'Never synced',
             last_successful_fetch: null,
             latest_event_time: null,
             cache_ttl_seconds: 180,
-            provider_update_frequency: 'Every 1 minute (all_hour.geojson feed)',
+            provider_update_frequency: 'Every 5 minutes (scheduled sync)',
             frontend_poll_interval_seconds: 60,
             is_fresh: false,
             is_stale: false,
             documentation_url:
                 'https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson',
         },
-        eonet: {
-            source: 'NASA EONET',
-            name: 'NASA Earth Observatory Natural Event Tracker (EONET v3)',
-            status: 'Unavailable',
-            freshness_status: 'Unavailable',
-            connection_status: 'Awaiting telemetry sync',
-            last_successful_fetch: null,
-            latest_event_time: null,
-            cache_ttl_seconds: 900,
-            provider_update_frequency:
-                'Sub-daily satellite & partner agency updates',
-            frontend_poll_interval_seconds: 60,
-            is_fresh: false,
-            is_stale: false,
-            documentation_url: 'https://eonet.gsfc.nasa.gov/api/v3/events',
-        },
         weather: {
             source: 'Open-Meteo',
             name: 'Open-Meteo Weather Forecast API',
             status: 'Unavailable',
             freshness_status: 'Unavailable',
-            connection_status: 'Awaiting telemetry sync',
+            connection_status: 'Never synced',
             last_successful_fetch: null,
             latest_event_time: null,
             cities_count: 0,
             cache_ttl_seconds: 900,
             provider_update_frequency:
-                'Every 15–60 minutes (numerical weather model)',
+                'Every 30 minutes (scheduled sync)',
             frontend_poll_interval_seconds: 60,
             is_fresh: false,
             is_stale: false,
@@ -173,6 +158,7 @@ function normalizeDashboardData(
 
     return {
         generated_at: raw.generated_at ?? DEFAULT_DASHBOARD_DATA.generated_at,
+        data_as_of: raw.data_as_of ?? null,
         summary: raw.summary ?? DEFAULT_DASHBOARD_DATA.summary,
         events: Array.isArray(raw.events) ? raw.events : [],
         weather: Array.isArray(raw.weather) ? raw.weather : [],
@@ -191,10 +177,6 @@ function normalizeDashboardData(
             usgs: normalizeSourceFreshness(
                 raw.sources?.usgs,
                 DEFAULT_DASHBOARD_DATA.sources.usgs,
-            ),
-            eonet: normalizeSourceFreshness(
-                raw.sources?.eonet,
-                DEFAULT_DASHBOARD_DATA.sources.eonet,
             ),
             weather: normalizeSourceFreshness(
                 raw.sources?.weather,
@@ -225,7 +207,6 @@ export function useDisasterTelemetry(
     const sourceList = computed(() => [
         data.value.sources.gdacs,
         data.value.sources.usgs,
-        data.value.sources.eonet,
         data.value.sources.weather,
     ]);
 
@@ -240,8 +221,7 @@ export function useDisasterTelemetry(
     const allEventSourcesUnavailable = computed(
         () =>
             data.value.sources.gdacs.status === 'Unavailable' &&
-            data.value.sources.usgs.status === 'Unavailable' &&
-            data.value.sources.eonet.status === 'Unavailable',
+            data.value.sources.usgs.status === 'Unavailable',
     );
 
     let abortController: AbortController | null = null;
@@ -268,6 +248,13 @@ export function useDisasterTelemetry(
                 },
             });
 
+            if (response.status === 429) {
+                syncError.value =
+                    'Too many reloads. Please wait a moment before reloading again.';
+
+                return;
+            }
+
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}`);
             }
@@ -281,7 +268,7 @@ export function useDisasterTelemetry(
                 return;
             }
             syncError.value =
-                'Unable to reach live telemetry endpoint. Showing most recent verified cached data.';
+                'Unable to reach the server. Showing the data already on this page.';
         } finally {
             isRefreshing.value = false;
         }

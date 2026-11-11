@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Link } from '@inertiajs/vue3';
-import { ShieldAlert } from '@lucide/vue';
+import BrandLogo from '@/components/BrandLogo.vue';
 </script>
 
 <template>
@@ -12,11 +12,7 @@ import { ShieldAlert } from '@lucide/vue';
                 <!-- Brand summary -->
                 <div class="space-y-3 md:col-span-2">
                     <div class="flex items-center gap-2">
-                        <div
-                            class="flex size-7 items-center justify-center rounded-lg bg-destructive/10 text-destructive ring-1 ring-destructive/20"
-                        >
-                            <ShieldAlert class="size-4" />
-                        </div>
+                        <BrandLogo class="size-8" />
                         <span class="text-sm font-bold text-foreground">
                             DisasterLink<span class="text-destructive"
                                 >SEA</span
@@ -34,7 +30,7 @@ import { ShieldAlert } from '@lucide/vue';
                     >
                         <strong class="text-foreground">Safety Notice:</strong>
                         Telemetry is compiled from automated public APIs (GDACS,
-                        USGS, NASA EONET, Open-Meteo). In emergency situations,
+                        USGS, Open-Meteo). In emergency situations,
                         strictly follow directives from national disaster
                         management offices (NDMOs) and local civil defense
                         authorities.
@@ -91,10 +87,10 @@ import { ShieldAlert } from '@lucide/vue';
                         </li>
                         <li>
                             <Link
-                                href="/freshness"
+                                href="/preparedness"
                                 class="transition-colors hover:text-foreground hover:underline"
                             >
-                                Data Provenance & Freshness
+                                Safety Guides
                             </Link>
                         </li>
                     </ul>
@@ -154,9 +150,9 @@ import { ShieldAlert } from '@lucide/vue';
                         >Weather</Link
                     >
                     <Link
-                        href="/freshness"
+                        href="/preparedness#contacts"
                         class="transition-colors hover:text-foreground hover:underline"
-                        >Data Freshness</Link
+                        >Emergency Contacts</Link
                     >
                 </div>
             </div>

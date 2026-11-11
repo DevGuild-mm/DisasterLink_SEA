@@ -4,12 +4,9 @@ import {
     Activity,
     AlertTriangle,
     ArrowRight,
-    BellRing,
     CloudSun,
-    Database,
     ExternalLink,
     Globe,
-    LifeBuoy,
     RefreshCw,
     ShieldAlert,
 } from '@lucide/vue';
@@ -18,13 +15,39 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import DisasterFooter from '@/components/disaster/DisasterFooter.vue';
 import DisasterHeader from '@/components/disaster/DisasterHeader.vue';
+import CountryAlerts from '@/components/disaster/CountryAlerts.vue';
+import type { CountryAlertsData } from '@/components/disaster/CountryAlerts.vue';
 import RegionalOverview from '@/components/disaster/RegionalOverview.vue';
 import { useDisasterTelemetry } from '@/composables/useDisasterTelemetry';
 import type { DashboardData } from '@/types/disaster';
 
 const props = defineProps<{
     initialDashboardData?: DashboardData | null;
+    guidesPreview?: Array<{
+        id: number;
+        title: string;
+        summary: string;
+        hazard_type: string;
+    }>;
+    contactsPreview?: Array<{
+        id: number;
+        agency_name: string;
+        category: string;
+        phone: string;
+        phone_link: string;
+    }>;
+    contactsCountry?: { iso2: string; name: string } | null;
+    countries?: Array<{ id: number; iso2: string; name: string }>;
+    countryAlerts?: CountryAlertsData | null;
 }>();
+
+function chooseContactsCountry(event: Event) {
+    const value = (event.target as HTMLSelectElement).value;
+
+    if (value) {
+        router.get('/preparedness#contacts', { country: value });
+    }
+}
 
 const {
     data,
@@ -46,22 +69,6 @@ const keyFeatures = [
         icon: Activity,
         href: '/overview',
         color: 'text-rose-500 bg-rose-500/10 border-rose-500/20',
-    },
-    {
-        title: 'Early Warning & Risk Intelligence',
-        description:
-            'Multi-hazard risk assessment scoring, automated early warning alerts, longitudinal ASEAN analytics, and response triage.',
-        icon: BellRing,
-        href: '/intelligence',
-        color: 'text-purple-500 bg-purple-500/10 border-purple-500/20',
-    },
-    {
-        title: 'Emergency Coordination & Shelters',
-        description:
-            'Shelter availability tracking, relief supply inventories, verified hazard-aware evacuation transit, and volunteer rescue dispatch.',
-        icon: LifeBuoy,
-        href: '/coordination',
-        color: 'text-sky-500 bg-sky-500/10 border-sky-500/20',
     },
     {
         title: 'Interactive Regional Map',
@@ -105,13 +112,6 @@ const dataSources = [
         url: 'https://earthquake.usgs.gov',
     },
     {
-        name: 'NASA EONET',
-        org: 'NASA Earth Observatory',
-        coverage:
-            'Satellite tracking for wildfires, severe storms, thermal hotspots, and floods',
-        url: 'https://eonet.gsfc.nasa.gov',
-    },
-    {
         name: 'Open-Meteo',
         org: 'Open Meteorological Simulation API',
         coverage:
@@ -137,6 +137,7 @@ const dataSources = [
         <!-- Header Navigation & Live Refresh Status Bar -->
         <DisasterHeader
             :last-updated="data.generated_at"
+            :data-as-of="data.data_as_of"
             :is-refreshing="isRefreshing"
             :countdown="countdown"
             :is-tab-visible="isTabVisible"
@@ -223,7 +224,7 @@ const dataSources = [
                             >
                                 An open regional intelligence platform
                                 consolidating verified bulletins from GDACS,
-                                USGS, NASA EONET, and Open-Meteo across all 11
+                                USGS, and Open-Meteo across all 11
                                 ASEAN member nations. Track earthquakes, storms,
                                 floods, and atmospheric conditions with genuine
                                 scientific accuracy.
@@ -458,6 +459,9 @@ const dataSources = [
                 </div>
             </section>
 
+            <!-- Country alerts: guest promotion or the signed-in user's recent alerts (HLD §8.2) -->
+            <CountryAlerts :country-alerts="countryAlerts" />
+
             <!-- B. Regional Overview Cards (Home / Overview) -->
             <div class="border-b border-border/60 bg-muted/15">
                 <RegionalOverview
@@ -654,17 +658,117 @@ const dataSources = [
                         </Card>
                     </div>
 
-                    <div class="mt-8 text-center">
-                        <Link
-                            href="/freshness"
-                            class="inline-flex items-center gap-1.5 text-xs font-semibold text-foreground hover:text-destructive hover:underline"
-                        >
-                            <Database class="size-3.5" />
-                            <span
-                                >View Real-Time API Health & Freshness
-                                Diagnostics &rarr;</span
+                </div>
+            </section>
+
+            <!-- Be prepared: safety guides and emergency contacts (HLD §8.1) -->
+            <section class="border-t border-border bg-muted/20 py-10">
+                <div
+                    class="mx-auto grid max-w-7xl gap-8 px-4 sm:px-6 lg:grid-cols-2 lg:px-8"
+                >
+                    <div>
+                        <h2 class="text-xl font-bold">Safety guides</h2>
+                        <p class="mt-1 text-sm text-muted-foreground">
+                            What to do before, during and after a disaster.
+                        </p>
+
+                        <ul v-if="guidesPreview?.length" class="mt-4 space-y-3">
+                            <li
+                                v-for="guide in guidesPreview"
+                                :key="guide.id"
+                                class="rounded-xl border border-border bg-card p-4"
                             >
-                        </Link>
+                                <p
+                                    class="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase"
+                                >
+                                    {{ guide.hazard_type }}
+                                </p>
+                                <p class="font-medium">{{ guide.title }}</p>
+                                <p class="text-sm text-muted-foreground">
+                                    {{ guide.summary }}
+                                </p>
+                            </li>
+                        </ul>
+                        <p v-else class="mt-4 text-sm text-muted-foreground">
+                            No safety guides have been published yet.
+                        </p>
+
+                        <Link
+                            href="/preparedness#guides"
+                            class="mt-4 inline-block text-sm font-semibold hover:underline"
+                            >View all safety guides &rarr;</Link
+                        >
+                    </div>
+
+                    <div>
+                        <h2 class="text-xl font-bold">Emergency contacts</h2>
+                        <p class="mt-1 text-sm text-muted-foreground">
+                            <template v-if="contactsCountry"
+                                >Key numbers for
+                                {{ contactsCountry.name }}.</template
+                            >
+                            <template v-else
+                                >Choose a country to see its key
+                                numbers.</template
+                            >
+                        </p>
+
+                        <label
+                            v-if="!contactsCountry"
+                            class="mt-4 flex flex-col gap-1 text-xs font-medium"
+                        >
+                            Country
+                            <select
+                                class="h-9 rounded-md border border-border bg-card px-3 text-sm"
+                                @change="chooseContactsCountry"
+                            >
+                                <option value="">Choose a country</option>
+                                <option
+                                    v-for="country in countries"
+                                    :key="country.id"
+                                    :value="country.iso2"
+                                >
+                                    {{ country.name }}
+                                </option>
+                            </select>
+                        </label>
+
+                        <ul
+                            v-else-if="contactsPreview?.length"
+                            class="mt-4 space-y-3"
+                        >
+                            <li
+                                v-for="contact in contactsPreview"
+                                :key="contact.id"
+                                class="rounded-xl border border-border bg-card p-4"
+                            >
+                                <p class="font-medium">
+                                    {{ contact.agency_name }}
+                                </p>
+                                <a
+                                    :href="contact.phone_link"
+                                    class="text-lg font-bold text-primary"
+                                    >{{ contact.phone }}</a
+                                >
+                            </li>
+                        </ul>
+                        <p
+                            v-else-if="contactsCountry"
+                            class="mt-4 text-sm text-muted-foreground"
+                        >
+                            No emergency contacts have been published for
+                            {{ contactsCountry.name }} yet.
+                        </p>
+
+                        <Link
+                            :href="
+                                contactsCountry
+                                    ? `/preparedness?country=${contactsCountry.iso2}#contacts`
+                                    : '/preparedness#contacts'
+                            "
+                            class="mt-4 inline-block text-sm font-semibold hover:underline"
+                            >View all emergency contacts &rarr;</Link
+                        >
                     </div>
                 </div>
             </section>

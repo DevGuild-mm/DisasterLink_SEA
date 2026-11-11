@@ -400,6 +400,7 @@ function formatTime(iso: string | null | undefined): string {
     >
         <DisasterHeader
             :last-updated="dashboardData.generated_at"
+            :data-as-of="dashboardData.data_as_of"
             :is-refreshing="isDashboardRefreshing || isFiltering"
             :countdown="countdown"
             :is-tab-visible="isTabVisible"
