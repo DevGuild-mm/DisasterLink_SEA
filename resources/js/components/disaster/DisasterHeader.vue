@@ -19,6 +19,7 @@ import {
     X,
 } from '@lucide/vue';
 import { computed, onMounted, ref } from 'vue';
+import BrandLogo from '@/components/BrandLogo.vue';
 import { Button } from '@/components/ui/button';
 import {
     DropdownMenu,
@@ -146,19 +147,9 @@ function formatTime(isoString: string | null): string {
                 href="/"
                 class="group flex shrink-0 items-center gap-2.5 focus:outline-none"
             >
-                <div
-                    class="relative flex size-9 items-center justify-center rounded-lg bg-destructive/10 text-destructive ring-1 ring-destructive/25 transition-colors group-hover:bg-destructive/15"
-                >
-                    <ShieldAlert class="size-5" />
-                    <span class="absolute -top-0.5 -right-0.5 flex size-2.5">
-                        <span
-                            class="absolute inline-flex h-full w-full animate-ping rounded-full bg-destructive opacity-75"
-                        ></span>
-                        <span
-                            class="relative inline-flex size-2.5 rounded-full bg-destructive"
-                        ></span>
-                    </span>
-                </div>
+                <BrandLogo
+                    class="size-10 transition-opacity group-hover:opacity-90"
+                />
                 <div class="flex flex-col">
                     <div class="flex items-center gap-1.5">
                         <span

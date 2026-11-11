@@ -32,7 +32,7 @@ test('every authentication page uses the themed layout, not the starter sidebar 
 test('the layout has the logo, the tagline, a Back to home link and the Login | Register toggle', function () {
     $layout = authSource('js/layouts/auth/AuthDisasterLayout.vue');
 
-    expect($layout)->toContain('ShieldAlert')
+    expect($layout)->toContain('<BrandLogo')
         ->and($layout)->toContain('DisasterLink')
         ->and($layout)->toContain('Stay Informed.')
         ->and($layout)->toContain('Stay Prepared.')

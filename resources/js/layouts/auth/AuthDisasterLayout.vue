@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Link } from '@inertiajs/vue3';
-import { ArrowLeft, BellRing, BookOpen, Globe, ShieldAlert } from '@lucide/vue';
+import { ArrowLeft, BellRing, BookOpen, Globe } from '@lucide/vue';
+import BrandLogo from '@/components/BrandLogo.vue';
 import { home, login, register } from '@/routes';
 
 /**
@@ -41,11 +42,7 @@ const highlights = [
             ></div>
 
             <Link :href="home()" class="group relative flex items-center gap-3">
-                <span
-                    class="flex size-10 items-center justify-center rounded-lg bg-red-500/15 text-red-400 ring-1 ring-red-400/30"
-                >
-                    <ShieldAlert class="size-6" />
-                </span>
+                <BrandLogo force-dark class="size-12" />
                 <span class="flex flex-col leading-tight">
                     <span class="text-xl font-bold tracking-tight">
                         DisasterLink<span class="text-red-400">SEA</span>
@@ -103,11 +100,7 @@ const highlights = [
                     class="flex items-center gap-2 lg:hidden"
                     aria-label="DisasterLink SEA home"
                 >
-                    <span
-                        class="flex size-8 items-center justify-center rounded-lg bg-destructive/10 text-destructive ring-1 ring-destructive/25"
-                    >
-                        <ShieldAlert class="size-4.5" />
-                    </span>
+                    <BrandLogo class="size-9" />
                     <span class="text-base font-bold tracking-tight">
                         DisasterLink<span class="text-destructive">SEA</span>
                     </span>
