@@ -7,6 +7,7 @@ use App\Models\Country;
 use App\Models\DataSource;
 use App\Models\SyncRun;
 use App\Services\Disaster\Dashboard\DashboardCache;
+use Illuminate\Contracts\Cache\Lock;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
@@ -38,27 +39,136 @@ class WeatherRefreshService
 
     public function __construct(private DashboardCache $dashboardCache) {}
 
+    /** A queued manual run that no worker claimed in this time is expired (same rule as the event sources). */
+    private const QUEUE_EXPIRY_MINUTES = 10;
+
     /**
+     * Refresh under the `sync:open_meteo` lock, the one the scheduler, the catch-up and the admin job all share.
+     *
+     * With `$queuedRunId` (the admin "Sync from sources" job) the queued row is claimed with one atomic update and
+     * that same row records the run, so the trigger and the requesting admin stay on it.
+     *
      * @return SyncRun|null null when another weather refresh holds the lock
      */
-    public function refresh(): ?SyncRun
+    public function refresh(?int $queuedRunId = null): ?SyncRun
     {
-        $lock = Cache::lock('sync:'.self::SOURCE, (int) config('disaster_sources.sync.lock_seconds', 300));
+        $lock = $this->lock();
 
         if (! $lock->get()) {
             return null;
         }
 
         try {
-            return $this->run();
+            $this->sweepAbandoned();
+
+            if ($queuedRunId === null) {
+                return $this->run(null, 'scheduler');
+            }
+
+            $claimed = SyncRun::query()
+                ->where('id', $queuedRunId)
+                ->where('status', 'queued')
+                ->where('queued_at', '>=', Carbon::now()->subMinutes(self::QUEUE_EXPIRY_MINUTES))
+                ->update(['status' => 'running', 'started_at' => Carbon::now()]);
+
+            if ($claimed === 0) {
+                Log::info("Weather run {$queuedRunId} was not claimed (expired or already taken).");
+
+                return SyncRun::query()->find($queuedRunId);
+            }
+
+            return $this->run(SyncRun::query()->findOrFail($queuedRunId), 'manual');
         } finally {
             $lock->release();
         }
     }
 
-    private function run(): SyncRun
+    /**
+     * Refresh once when the scheduled runs were missed (the machine slept, the scheduler was stopped).
+     *
+     * The staleness check happens after the lock is taken, so a scheduled or admin refresh that finishes at the
+     * same moment is seen as fresh and no second request is made.
+     *
+     * @return SyncRun|null null when no catch-up was needed or another refresh holds the lock
+     */
+    public function catchUp(): ?SyncRun
     {
-        $startedAt = Carbon::now();
+        // Lock-free pre-check: when the data is fresh (the usual case, every minute) nothing else is touched.
+        if (! $this->needsCatchUp()) {
+            return null;
+        }
+
+        $lock = $this->lock();
+
+        if (! $lock->get()) {
+            return null;
+        }
+
+        try {
+            // Checked again under the lock: a refresh that finished meanwhile makes this one unnecessary.
+            if (! $this->needsCatchUp()) {
+                return null;
+            }
+
+            $this->sweepAbandoned();
+
+            return $this->run(null, 'catch_up');
+        } finally {
+            $lock->release();
+        }
+    }
+
+    /**
+     * The last success is older than the catch-up limit and no attempt happened within the retry window.
+     */
+    public function needsCatchUp(): bool
+    {
+        $source = DataSource::query()->where('key', self::SOURCE)->first();
+        $now = Carbon::now();
+
+        $staleAfter = (int) config('disaster_sources.sources.open_meteo.delayed_after_minutes', 60);
+        $retryAfter = (int) config('disaster_sources.sources.open_meteo.catch_up_retry_minutes', 30);
+
+        if ($source?->last_success_at !== null && $source->last_success_at->greaterThanOrEqualTo($now->copy()->subMinutes($staleAfter))) {
+            return false;
+        }
+
+        return $source?->last_attempt_at === null || $source->last_attempt_at->lessThan($now->copy()->subMinutes($retryAfter));
+    }
+
+    private function lock(): Lock
+    {
+        return Cache::lock('sync:'.self::SOURCE, (int) config('disaster_sources.sync.lock_seconds', 300));
+    }
+
+    /**
+     * Runs only while this process holds the lock, so no live weather run exists. Leftover `running` rows are
+     * failed, and queued rows older than the expiry are failed (same rule as the event sources).
+     */
+    private function sweepAbandoned(): void
+    {
+        $now = Carbon::now();
+
+        $abandoned = SyncRun::query()->where('source_key', self::SOURCE)->where('status', 'running')->update([
+            'status' => 'failed',
+            'error_message' => 'Abandoned: the process stopped before finishing.',
+            'finished_at' => $now,
+        ]);
+
+        SyncRun::query()
+            ->where('source_key', self::SOURCE)
+            ->where('status', 'queued')
+            ->where('queued_at', '<', $now->copy()->subMinutes(self::QUEUE_EXPIRY_MINUTES))
+            ->update(['status' => 'failed', 'error_message' => 'Not picked up by a worker.', 'finished_at' => $now]);
+
+        if ($abandoned > 0) {
+            DataSource::query()->where('key', self::SOURCE)->where('last_status', 'running')->update(['last_status' => 'failed']);
+        }
+    }
+
+    private function run(?SyncRun $claimed, string $trigger): SyncRun
+    {
+        $startedAt = $claimed?->started_at ?? Carbon::now();
 
         $source = DataSource::query()->firstOrCreate(['key' => self::SOURCE], [
             'name' => (string) config('disaster_sources.sources.open_meteo.name', 'Open-Meteo'),
@@ -68,12 +178,17 @@ class WeatherRefreshService
 
         $source->update(['last_attempt_at' => $startedAt, 'last_status' => 'running']);
 
-        $run = SyncRun::query()->create(['source_key' => self::SOURCE, 'status' => 'running', 'started_at' => $startedAt]);
+        $run = $claimed ?? SyncRun::query()->create([
+            'source_key' => self::SOURCE,
+            'status' => 'running',
+            'trigger' => $trigger,
+            'started_at' => $startedAt,
+        ]);
         $timer = hrtime(true);
 
         try {
             $countries = Country::query()->where('is_active', true)->orderBy('sort_order')->get();
-            [$rows, $httpStatus] = $this->fetch($countries->all());
+            [$rows, $httpStatus, $warning] = $this->fetch($countries->all());
             $changed = $this->store($rows);
         } catch (Throwable $e) {
             return $this->fail($source, $run, $e, $this->durationMs($timer));
@@ -85,6 +200,7 @@ class WeatherRefreshService
             'fetched_count' => count($rows),
             'processed_count' => $changed,
             'updated_count' => $changed,
+            'warning_message' => $warning,
             'duration_ms' => $this->durationMs($timer),
             'finished_at' => Carbon::now(),
         ]);
@@ -107,7 +223,7 @@ class WeatherRefreshService
 
     /**
      * @param  array<int, Country>  $countries
-     * @return array{array<int, array<string, mixed>>, int}
+     * @return array{array<int, array<string, mixed>>, int, string|null} rows, HTTP status, and a warning when only some capitals were usable
      */
     private function fetch(array $countries): array
     {
@@ -141,7 +257,7 @@ class WeatherRefreshService
         }
 
         if (! $response->successful()) {
-            throw new RuntimeException('Open-Meteo returned HTTP '.$response->status().'.');
+            throw new OpenMeteoHttpException($response->status());
         }
 
         $data = $response->json();
@@ -186,7 +302,14 @@ class WeatherRefreshService
             throw new RuntimeException('Open-Meteo returned no usable capital observations.');
         }
 
-        return [$rows, $response->status()];
+        // A partial answer is still a success: the usable observations are stored and the capitals without one keep
+        // their previous observation (their `observed_at` shows how old it is). The run says so instead of passing
+        // as a full refresh.
+        $warning = count($rows) < count($countries)
+            ? 'Partial response: usable observations for '.count($rows).' of '.count($countries).' capitals. The others kept their previous observations.'
+            : null;
+
+        return [$rows, $response->status(), $warning];
     }
 
     /**
@@ -253,7 +376,13 @@ class WeatherRefreshService
 
         Log::warning("Weather refresh failed: {$message}");
 
-        $run->update(['status' => 'failed', 'error_message' => $message, 'duration_ms' => $durationMs, 'finished_at' => Carbon::now()]);
+        $run->update([
+            'status' => 'failed',
+            'http_status' => $e instanceof OpenMeteoHttpException ? $e->httpStatus : null,
+            'error_message' => $message,
+            'duration_ms' => $durationMs,
+            'finished_at' => Carbon::now(),
+        ]);
         $source->update(['last_status' => 'failed', 'last_error' => $message, 'consecutive_failures' => $source->consecutive_failures + 1]);
 
         return $run;

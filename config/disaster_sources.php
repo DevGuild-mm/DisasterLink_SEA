@@ -98,6 +98,21 @@ return [
             'timeout' => 15,
             'connect_timeout' => 5,
             'retry_delays_ms' => [2000, 5000],
+            /*
+             * Freshness of the stored weather (HLD §10.3, §18.2). One policy for every reader:
+             * - delayed_after_minutes: the admin status turns Delayed, the public page shows its "may be out of date"
+             *   warning, and the catch-up refresh becomes due.
+             * - stale_after_minutes: the admin status turns Stale and the public warning says the data is stale.
+             */
+            'delayed_after_minutes' => 60,
+            'stale_after_minutes' => 180,
+            /*
+             * Catch-up after a missed schedule (laptop asleep, scheduler stopped): `weather:refresh-capitals --catch-up`
+             * refreshes only when the last success is older than `delayed_after_minutes` and no attempt, successful or
+             * not, happened in the last `catch_up_retry_minutes`. A provider outage therefore causes at most one
+             * extra attempt per window.
+             */
+            'catch_up_retry_minutes' => 30,
         ],
     ],
 

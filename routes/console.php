@@ -18,3 +18,9 @@ Schedule::command('alerts:dispatch')->everyFiveMinutes()->withoutOverlapping(10)
 
 // Capital weather (HLD §14): one batched Open-Meteo request every 30 minutes, staggered from the event syncs.
 Schedule::command('weather:refresh-capitals')->cron('12,42 * * * *')->withoutOverlapping(10);
+
+// Weather catch-up: Laravel never replays slots missed while the machine slept or the scheduler was stopped, and has
+// no wake event. This cheap check runs on the first tick after the scheduler is active again and refreshes only when
+// the stored weather is delayed (more than 60 minutes old) and nothing was attempted in the last 30. Every minute is
+// cheap: a fresh answer is one indexed read and no lock; the lock and the API are reached only when a refresh is due.
+Schedule::command('weather:refresh-capitals --catch-up')->everyMinute()->withoutOverlapping(10);

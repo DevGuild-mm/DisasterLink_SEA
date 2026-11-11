@@ -57,9 +57,9 @@ test('only a verified admin can sync or read data sources', function () {
     expect(SyncRun::count())->toBe(0);
 });
 
-test('the source must be gdacs, usgs or all', function (string $source) {
+test('the source must be gdacs, usgs, open_meteo or all', function (string $source) {
     $this->actingAs(adminUser())->postJson('/admin/data-sources/refresh', ['source' => $source])->assertUnprocessable();
-})->with(['open_meteo', 'nasa', '']);
+})->with(['weather', 'nasa', '']);
 
 test('the request is throttled to 3 per minute per user', function () {
     Queue::fake();
@@ -94,17 +94,17 @@ test('a request queues one job and one queued row and never contacts a provider'
     Http::assertNothingSent();
 });
 
-test('"all" creates one row per source with the same request id', function () {
+test('"all" creates one row per source (GDACS, USGS and Open-Meteo) with the same request id', function () {
     Queue::fake();
 
     $response = $this->actingAs(adminUser())->postJson('/admin/data-sources/refresh', ['source' => 'all'])->assertStatus(202);
 
     $runs = SyncRun::orderBy('source_key')->get();
-    expect($runs->pluck('source_key')->all())->toBe(['gdacs', 'usgs'])
+    expect($runs->pluck('source_key')->all())->toBe(['gdacs', 'open_meteo', 'usgs'])
         ->and($runs->pluck('request_uuid')->unique()->all())->toBe([$response->json('request_uuid')])
-        ->and(array_keys($response->json('results')))->toBe(['gdacs', 'usgs']);
+        ->and(array_keys($response->json('results')))->toBe(['gdacs', 'usgs', 'open_meteo']);
 
-    Queue::assertPushed(RunSourceSync::class, 2);
+    Queue::assertPushed(RunSourceSync::class, 3);
 });
 
 test('a source that is already queued creates no second row or job', function () {

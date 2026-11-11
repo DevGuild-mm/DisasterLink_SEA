@@ -13,6 +13,7 @@ interface Run {
     started_at: string | null;
     finished_at: string | null;
     duration_ms: number | null;
+    http_status: number | null;
     fetched_count: number;
     created_count: number;
     updated_count: number;
@@ -40,6 +41,8 @@ interface Card {
     latest_observation_at?: string | null;
     capitals_with_data?: number;
     capitals_total?: number;
+    oldest_observation_at?: string | null;
+    capitals_outdated?: number;
 }
 
 const cards = ref<Card[]>([]);
@@ -47,6 +50,39 @@ const runs = ref<Run[]>([]);
 const loadError = ref<string | null>(null);
 const requesting = ref(false);
 const messages = ref<Record<string, string>>({});
+
+const sourceFilter = ref<string>('all');
+
+const SOURCE_LABELS: Record<string, string> = {
+    gdacs: 'GDACS',
+    usgs: 'USGS',
+    open_meteo: 'Open-Meteo',
+};
+
+const visibleRuns = computed(() =>
+    sourceFilter.value === 'all'
+        ? runs.value
+        : runs.value.filter((run) => run.source_key === sourceFilter.value),
+);
+
+function sourceLabel(key: string): string {
+    return SOURCE_LABELS[key] ?? key;
+}
+
+function triggerLabel(run: Run): string {
+    switch (run.trigger) {
+        case 'manual':
+            return run.requested_by
+                ? `Manual (${run.requested_by})`
+                : 'Manual (admin)';
+        case 'catch_up':
+            return 'Catch-up (after a missed schedule)';
+        case 'scheduler':
+            return 'Scheduled';
+        default:
+            return run.trigger;
+    }
+}
 
 const busy = computed(() =>
     cards.value.some((card) =>
@@ -89,7 +125,7 @@ async function load() {
     }
 }
 
-async function sync(source: 'gdacs' | 'usgs' | 'all') {
+async function sync(source: 'gdacs' | 'usgs' | 'open_meteo' | 'all') {
     requesting.value = true;
     messages.value = {};
 
@@ -228,15 +264,23 @@ onUnmounted(() => {
                 @click="sync('usgs')"
                 >USGS only</Button
             >
+            <Button
+                size="sm"
+                variant="outline"
+                :disabled="requesting"
+                @click="sync('open_meteo')"
+                data-test="sync-open-meteo"
+                >Open-Meteo only</Button
+            >
             <span class="text-xs text-muted-foreground"
-                >Fetches from GDACS and USGS through a queue worker. Weather
-                runs on its own schedule.</span
+                >Fetches from GDACS, USGS and Open-Meteo through a queue
+                worker. Each source also runs on its own schedule.</span
             >
         </div>
 
         <ul v-if="Object.keys(messages).length" class="space-y-1 text-sm">
             <li v-for="(text, key) in messages" :key="key">
-                <strong v-if="key !== 'all'" class="uppercase">{{ key }}:</strong>
+                <strong v-if="key !== 'all'">{{ sourceLabel(String(key)) }}:</strong>
                 {{ text }}
             </li>
         </ul>
@@ -287,6 +331,19 @@ onUnmounted(() => {
                     <template v-if="card.key === 'open_meteo'">
                         <dt class="text-muted-foreground">Newest observation</dt>
                         <dd>{{ time(card.latest_observation_at ?? null) }}</dd>
+                        <dt class="text-muted-foreground">Oldest observation</dt>
+                        <dd>{{ time(card.oldest_observation_at ?? null) }}</dd>
+                        <dt class="text-muted-foreground">Capitals not updated</dt>
+                        <dd
+                            :class="
+                                (card.capitals_outdated ?? 0) > 0
+                                    ? 'text-amber-600'
+                                    : ''
+                            "
+                            data-test="capitals-outdated"
+                        >
+                            {{ card.capitals_outdated ?? 0 }}
+                        </dd>
                         <dt class="text-muted-foreground">Capitals with data</dt>
                         <dd>
                             {{ card.capitals_with_data }} of
@@ -315,6 +372,18 @@ onUnmounted(() => {
                     <p :class="stateClass(card.latest_run.state)">
                         {{ stateLabel(card.latest_run) }}
                     </p>
+                    <p class="text-muted-foreground">
+                        {{ triggerLabel(card.latest_run) }}
+                        <span v-if="card.latest_run.http_status">
+                            · HTTP {{ card.latest_run.http_status }}</span
+                        >
+                    </p>
+                    <p
+                        v-if="card.latest_run.error_message"
+                        class="text-destructive"
+                    >
+                        {{ card.latest_run.error_message }}
+                    </p>
                     <p
                         v-if="card.latest_run.warning_message"
                         class="text-amber-600"
@@ -335,7 +404,34 @@ onUnmounted(() => {
         <div class="overflow-x-auto rounded-xl border border-border">
             <table class="w-full text-left text-xs">
                 <caption class="p-3 text-left text-sm font-semibold">
-                    Last 20 runs
+                    <span class="mr-3">Recent runs (last 10 per source)</span>
+                    <span class="inline-flex flex-wrap gap-1 align-middle">
+                        <button
+                            v-for="option in [
+                                'all',
+                                'gdacs',
+                                'usgs',
+                                'open_meteo',
+                            ]"
+                            :key="option"
+                            type="button"
+                            :data-test="`history-filter-${option}`"
+                            :aria-pressed="sourceFilter === option"
+                            :class="[
+                                'rounded-full border px-2.5 py-0.5 text-xs font-medium',
+                                sourceFilter === option
+                                    ? 'border-transparent bg-primary text-primary-foreground'
+                                    : 'border-border bg-card text-muted-foreground hover:text-foreground',
+                            ]"
+                            @click="sourceFilter = option"
+                        >
+                            {{
+                                option === 'all'
+                                    ? 'All'
+                                    : sourceLabel(option)
+                            }}
+                        </button>
+                    </span>
                 </caption>
                 <thead class="bg-muted/50 uppercase">
                     <tr>
@@ -344,22 +440,25 @@ onUnmounted(() => {
                         <th class="p-2">Trigger</th>
                         <th class="p-2">Started</th>
                         <th class="p-2">Duration</th>
+                        <th class="p-2">HTTP</th>
                         <th class="p-2">Fetched</th>
                         <th class="p-2">New / changed</th>
                         <th class="p-2">Note</th>
                     </tr>
                 </thead>
                 <tbody>
-                    <tr v-for="run in runs" :key="run.id" class="border-t">
-                        <td class="p-2 uppercase">{{ run.source_key }}</td>
+                    <tr
+                        v-for="run in visibleRuns"
+                        :key="run.id"
+                        class="border-t"
+                        :data-test="`run-row-${run.source_key}`"
+                    >
+                        <td class="p-2">{{ sourceLabel(run.source_key) }}</td>
                         <td class="p-2" :class="stateClass(run.state)">
                             {{ stateLabel(run) }}
                         </td>
-                        <td class="p-2">
-                            {{ run.trigger
-                            }}<span v-if="run.requested_by">
-                                ({{ run.requested_by }})</span
-                            >
+                        <td class="p-2" data-test="run-trigger">
+                            {{ triggerLabel(run) }}
                         </td>
                         <td class="p-2">{{ time(run.started_at) }}</td>
                         <td class="p-2">
@@ -369,6 +468,7 @@ onUnmounted(() => {
                                     : `${run.duration_ms} ms`
                             }}
                         </td>
+                        <td class="p-2">{{ run.http_status ?? '—' }}</td>
                         <td class="p-2">{{ run.fetched_count }}</td>
                         <td class="p-2">
                             {{ run.created_count }} / {{ run.updated_count }}
@@ -377,8 +477,8 @@ onUnmounted(() => {
                             {{ run.error_message ?? run.warning_message ?? '' }}
                         </td>
                     </tr>
-                    <tr v-if="runs.length === 0">
-                        <td colspan="8" class="p-4 text-center text-muted-foreground">
+                    <tr v-if="visibleRuns.length === 0">
+                        <td colspan="9" class="p-4 text-center text-muted-foreground">
                             No runs yet.
                         </td>
                     </tr>

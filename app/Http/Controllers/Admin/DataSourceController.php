@@ -20,8 +20,8 @@ use Illuminate\Support\Str;
  */
 class DataSourceController extends Controller
 {
-    /** Sources an admin may sync by hand. Weather is scheduled only. */
-    private const SOURCES = ['gdacs', 'usgs'];
+    /** Sources an admin may sync by hand. Weather goes through the same queue and cooldown as the event sources. */
+    private const SOURCES = ['gdacs', 'usgs', 'open_meteo'];
 
     private const COOLDOWN_SECONDS = 60;
 
@@ -34,7 +34,7 @@ class DataSourceController extends Controller
 
     public function refresh(Request $request): JsonResponse
     {
-        $validated = $request->validate(['source' => ['required', 'in:gdacs,usgs,all']]);
+        $validated = $request->validate(['source' => ['required', 'in:gdacs,usgs,open_meteo,all']]);
 
         $sources = $validated['source'] === 'all' ? self::SOURCES : [$validated['source']];
         $requestUuid = (string) Str::uuid();

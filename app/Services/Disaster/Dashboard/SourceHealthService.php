@@ -20,12 +20,8 @@ class SourceHealthService
         'open_meteo' => ['Open-Meteo', 'Open-Meteo Weather Forecast API', 'Every 30 minutes (scheduled sync)', 'https://open-meteo.com/en/docs'],
     ];
 
-    /** Delayed and Stale thresholds in minutes (HLD §18.2). */
-    private const THRESHOLDS = [
-        'usgs' => [10, 30],
-        'gdacs' => [30, 60],
-        'open_meteo' => [60, 180],
-    ];
+    /** Runs listed per source in the admin history. */
+    private const HISTORY_PER_SOURCE = 10;
 
     /** A queued run older than this many seconds suggests that no queue worker is running (HLD §28.8). */
     private const WORKER_WARNING_SECONDS = 120;
@@ -34,7 +30,25 @@ class SourceHealthService
     private const ABANDONED_SECONDS = 360;
 
     /**
-     * Admin Data Freshness: one card per source with the HLD §18.2 status, the latest run, and the last 20 runs.
+     * Delayed and Stale thresholds in minutes (HLD §18.2). The weather limits come from config, the one policy the
+     * admin status, the public warning and the catch-up refresh all read.
+     *
+     * @return array<string, array{int, int}>
+     */
+    private function thresholds(): array
+    {
+        return [
+            'usgs' => [10, 30],
+            'gdacs' => [30, 60],
+            'open_meteo' => [
+                (int) config('disaster_sources.sources.open_meteo.delayed_after_minutes', 60),
+                (int) config('disaster_sources.sources.open_meteo.stale_after_minutes', 180),
+            ],
+        ];
+    }
+
+    /**
+     * Admin Data Freshness: one card per source with the HLD §18.2 status, the latest run, and the last 10 runs of each source.
      *
      * @return array{sources: array<int, array<string, mixed>>, runs: array<int, array<string, mixed>>}
      */
@@ -44,7 +58,7 @@ class SourceHealthService
         $rows = DataSource::query()->get()->keyBy('key');
         $cards = [];
 
-        foreach (self::THRESHOLDS as $key => [$delayed, $stale]) {
+        foreach ($this->thresholds() as $key => [$delayed, $stale]) {
             $row = $rows->get($key);
             $latest = SyncRun::query()->where('source_key', $key)->latest('id')->first();
             $success = $row?->last_success_at;
@@ -81,12 +95,21 @@ class SourceHealthService
                     ? null : Carbon::parse(CapitalWeather::query()->max('observed_at'))->toIso8601String();
                 $card['capitals_with_data'] = CapitalWeather::query()->count();
                 $card['capitals_total'] = 11;
+                $card['oldest_observation_at'] = CapitalWeather::query()->min('observed_at') === null
+                    ? null : Carbon::parse(CapitalWeather::query()->min('observed_at'))->toIso8601String();
+                $card['capitals_outdated'] = CapitalWeather::query()->where('observed_at', '<', $now->copy()->subMinutes($delayed))->count();
             }
 
             $cards[] = $card;
         }
 
-        $runs = SyncRun::query()->latest('id')->limit(20)->get()->map(fn (SyncRun $run): array => $this->describeRun($run, $now))->all();
+        // The last runs of EACH source, so the five-minute USGS runs cannot push the weather history off the list.
+        $runs = collect(array_keys($this->thresholds()))
+            ->flatMap(fn (string $key) => SyncRun::query()->with('requestedBy')->where('source_key', $key)->latest('id')->limit(self::HISTORY_PER_SOURCE)->get())
+            ->sortByDesc('id')
+            ->values()
+            ->map(fn (SyncRun $run): array => $this->describeRun($run, $now))
+            ->all();
 
         return ['sources' => $cards, 'runs' => $runs];
     }
@@ -124,6 +147,7 @@ class SourceHealthService
             'started_at' => $run->started_at?->toIso8601String(),
             'finished_at' => $run->finished_at?->toIso8601String(),
             'duration_ms' => $run->duration_ms,
+            'http_status' => $run->http_status,
             'fetched_count' => $run->fetched_count,
             'created_count' => $run->created_count,
             'updated_count' => $run->updated_count,
@@ -171,13 +195,25 @@ class SourceHealthService
 
         $interval = max(1, (int) ($row?->interval_minutes ?? 15));
         $lastSuccess = $row?->last_success_at;
-        $isFresh = $lastSuccess !== null && $lastSuccess->greaterThanOrEqualTo(Carbon::now()->subMinutes($interval * 2));
+        $now = Carbon::now();
+
+        // The event sources are warned about after 2 x their interval. Weather uses the shared config policy:
+        // warned (Delayed) after delayed_after_minutes, Stale after stale_after_minutes.
+        $warnAfter = $key === 'open_meteo'
+            ? (int) config('disaster_sources.sources.open_meteo.delayed_after_minutes', 60)
+            : $interval * 2;
+        $staleAfter = $key === 'open_meteo'
+            ? (int) config('disaster_sources.sources.open_meteo.stale_after_minutes', 180)
+            : null;
+
+        $isFresh = $lastSuccess !== null && $lastSuccess->greaterThanOrEqualTo($now->copy()->subMinutes($warnAfter));
         $isStale = $lastSuccess !== null && ! $isFresh;
         $failed = $row?->last_status === 'failed';
 
         $status = match (true) {
             $lastSuccess === null => 'Unavailable',
             $isFresh => 'Live',
+            $staleAfter !== null && $lastSuccess->greaterThanOrEqualTo($now->copy()->subMinutes($staleAfter)) => 'Delayed',
             default => 'Stale',
         };
 
@@ -191,7 +227,7 @@ class SourceHealthService
             'source' => $label,
             'name' => $name,
             'status' => $status,
-            'freshness_status' => $status === 'Live' ? 'Fresh' : ($status === 'Stale' ? 'Stale' : 'Unavailable'),
+            'freshness_status' => $status === 'Live' ? 'Fresh' : (in_array($status, ['Stale', 'Delayed'], true) ? 'Stale' : 'Unavailable'),
             'connection_status' => $connection,
             'last_successful_fetch' => $lastSuccess?->toIso8601String(),
             'latest_event_time' => $latest === null ? null : Carbon::parse($latest)->toIso8601String(),

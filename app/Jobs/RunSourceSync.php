@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Models\SyncRun;
 use App\Services\Disaster\Sync\DisasterSyncService;
+use App\Services\Disaster\Weather\WeatherRefreshService;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -37,9 +38,11 @@ class RunSourceSync implements ShouldBeUnique, ShouldQueue
         return $this->source;
     }
 
-    public function handle(DisasterSyncService $sync): void
+    public function handle(DisasterSyncService $sync, ?WeatherRefreshService $weather = null): void
     {
-        $run = $sync->sync($this->source, $this->runId);
+        $run = $this->source === 'open_meteo'
+            ? ($weather ?? app(WeatherRefreshService::class))->refresh($this->runId)
+            : $sync->sync($this->source, $this->runId);
 
         if ($run !== null) {
             return;

@@ -404,7 +404,7 @@ Both pages reuse `DisasterHeader` / `DisasterFooter` and the existing card and t
 | 1. Overview | **Registered users** (total, verified, admins); Safety Guides count; Emergency Contacts count. Optional: events in the last 24 h, alerts sent/failed/deferred in the last 24 h, events awaiting country review, Resend quota used today and this month. | Must (counts); Should (extras) |
 | 2. Safety Guides | Table + filters (hazard, country); create, view, edit, delete, publish | Must |
 | 3. Emergency Contacts | Table + country filter; create, view, edit, delete, publish | Must |
-| 4. Data Freshness | Cards for **GDACS, USGS, Open-Meteo** (§18); last 20 runs; **Refresh now** per source | Must (status); Should (Refresh now) |
+| 4. Data Freshness | Cards for **GDACS, USGS, Open-Meteo** (§18); last 10 runs per source; **Refresh now** per source | Must (status); Should (Refresh now) |
 | Country review list | Events with `country_status = unresolved` and the reason | Should |
 
 ---
@@ -484,8 +484,8 @@ flowchart LR
 |---|---|---|---|
 | Endpoint | `gdacsapi/api/events/geteventlist/SEARCH`, `fromdate` = now − 7 days, `todate` = now, EQ,TC,FL,VO,WF,DR | `summary/all_day.geojson` (one request; drop `all_hour`) | `v1/forecast`, 11 capital coordinates, `current` + `daily` (1 day), one batched request |
 | **Interval** | **15 min** (:02, :17, :32, :47) | **5 min** | **30 min** (:12, :42) |
-| Delayed after | 30 min | 10 min | 60 min |
-| Stale after | 60 min | 30 min | 3 h |
+| Delayed after | 30 min | 10 min | 60 min (`open_meteo.delayed_after_minutes`) |
+| Stale after | 60 min | 30 min | 3 h (`open_meteo.stale_after_minutes`) |
 | Timeout (connect / total) | 5 s / 15 s | 5 s / 15 s | 5 s / 15 s |
 | Retries in a run | 2 (2 s, 5 s) on connection error / 429 / 5xx; respect `Retry-After` | same | same |
 | Alert threshold | Orange or Red | M ≥ 5.0 | none |
@@ -863,15 +863,18 @@ An event is **alert-eligible** when **all** of these hold:
   3. upsert the `capital_weather` snapshot (11 rows: `country_id`, temperature, weather code, condition, wind, humidity, daily min/max, `observed_at`, `fetched_at`),
   4. write the cache `weather:capitals:v1`,
   5. record the run in `sync_runs` / `data_sources`.
-- **Failure:** the snapshot and cache are untouched (the last good data stays). The run is recorded as failed and the error stored.
+- **Failure:** the snapshot and cache are untouched (the last good data stays). The run is recorded as failed and the error stored. `sync_runs.http_status` is set only for a real HTTP error answer (for example 503); a connection failure or any other exception leaves it empty.
+- **Partial response:** when fewer than all active capitals have a usable observation, the usable ones are stored, the others keep their previous observation (their `observed_at` shows how old it is), and the run is a **success with a warning** ("Partial response: usable observations for N of M capitals…"), not a failure. N counts the capitals for which the API returned a usable observation (`sync_runs.fetched_count`), **not** the database rows that changed: an answer with usable data for all capitals is a full success even if only one row's values differ. The number of changed rows is a separate count (`updated_count`). A response with no usable capital is still a failure.
+- **Catch-up:** Laravel does not replay scheduler slots missed while the machine slept and has no wake event. `weather:refresh-capitals --catch-up` runs **every minute**. A pre-check without the lock, repeated under the `sync:open_meteo` lock, refreshes only when the last success is older than `delayed_after_minutes` (60) **and** no attempt (any trigger, success or failure) happened in the last `catch_up_retry_minutes` (30). A fresh state costs one read and no request; an outage costs at most one extra attempt per 30 minutes. The run is recorded with trigger `catch_up` (scheduled runs `scheduler`, admin runs `manual`).
 - **Public reads never call Open-Meteo:** browser → Laravel → cache → (on a miss) `capital_weather` → response.
 - **The Weather UI is unchanged.** *(v1.5: not fully met. The snapshot has no columns for four old fields, so the UI no longer shows them. See §29.4.)*
 - **No selected-city weather, no city picker, no on-demand weather endpoint, no city cache keys.**
 
 ### 14.2 Weather freshness
 
-- **Admin:** the Open-Meteo `data_sources` row (interval 30 min; Delayed > 60 min; Stale > 3 h), plus the newest `observed_at` / `fetched_at` and how many of the 11 capitals have data.
-- **Public:** the existing per-city observation time. If Open-Meteo is Stale or Failed, the payload carries `weather_is_stale = true` and the existing UI can show "may be out of date" (Should Have). No diagnostics are shown publicly.
+- **One policy:** `config/disaster_sources.php` holds `open_meteo.delayed_after_minutes` = 60 and `stale_after_minutes` = 180. The admin status, the public warning and the catch-up refresh all read these values.
+- **Admin:** the Open-Meteo `data_sources` row (interval 30 min; Delayed > 60 min; Stale > 3 h), plus the newest and oldest `observed_at`, how many capitals were not updated within the Delayed limit, and how many of the 11 capitals have data.
+- **Public:** the existing per-city observation time. Older than 60 minutes the payload carries `is_stale = true` and the page shows "Weather data may be out of date" (status `Delayed`); older than 3 h it says the cached observations are stale (status `Stale`). The wording never claims a failed refresh unless an error is recorded. No diagnostics are shown publicly.
 - **Open-Meteo terms, attribution and limits:** §10.5 [Verify before deploy].
 
 ---
@@ -1226,6 +1229,8 @@ The public `/freshness` page and its nav links are **removed** (Approved). The A
 - if a disaster source returns zero events for **24 hours straight**, the card shows a warning "No events for 24 h: check the source" [Proposed],
 - a request that failed is **never** shown as Healthy, whatever is in the cache.
 
+**Partial weather response:** a run that updated only some capitals stays a success but carries a warning ("usable observations for N of M capitals"; changed rows are counted separately in `updated_count` and never decide this); the card and the run list show it, and the status is still computed from timestamps.
+
 ### 18.3 Admin tab content and Refresh now
 
 - **One card per source** (GDACS, USGS, Open-Meteo), each showing:
@@ -1236,7 +1241,7 @@ The public `/freshness` page and its nav links are **removed** (Approved). The A
   - latest error,
   - consecutive failures.
 
-  The Open-Meteo card also shows the newest `capital_weather.observed_at` and capital coverage (n of 11).
+  The Open-Meteo card also shows the newest and oldest `capital_weather.observed_at`, how many capitals were not updated within the Delayed limit, and capital coverage (n of 11).
 - **Banners:** "Scheduler stopped" and "Queue worker stopped" (§17.3).
 - **Sync from sources** (v1.4; was "Refresh now"), per source or all: queues `RunSourceSync`, which **really fetches from the provider** through `DisasterSyncService`, using the same lock as the scheduler. The response says `queued`, `already_running`, `already_queued` or `cooldown` per source, and the card then shows queued / running / success / success with warnings / failed from the `sync_runs` row (§28.8). It never claims a sync has started or finished before the worker has run it, and never returns a cached response as if it were new.
 - The last 20 `sync_runs` are shown below the cards.
@@ -2311,7 +2316,7 @@ The scheduler path has no queued row: `DisasterSyncService::sync()` returns `nul
 | 4 | **Unresolved events** | `country_status` rules in §12 | `resolved` events show their country. `unresolved` events show as "Regional / Unattributed". `outside_region` events are hidden | Needed a display rule |
 | 5 | **`data_as_of`** | "Last successful source sync" | The **older** of the GDACS and USGS `last_success_at`. A source is Live within 2 x its interval, Stale after that, Unavailable if it never succeeded | An old source must not be hidden by a fresh one |
 | 6 | **Source health** | `SourceHealthService` in Phase 6 | Built in Phase 5, read live, never cached | The pages needed it |
-| 7 | **Weather refresh** | Phase 5 did not list it (§28.12) | Built in Phase 5 because the pages no longer call Open-Meteo. Lock `sync:open_meteo` 300 s; schedule `12,42 * * * *` with `withoutOverlapping(10)`; two retries (2 s, 5 s) on connection errors and 5xx; no `Retry-After` handling and no total deadline (unlike `SourceClient`) | Without it the weather would be empty |
+| 7 | **Weather refresh** | Phase 5 did not list it (§28.12) | Built in Phase 5 because the pages no longer call Open-Meteo. Lock `sync:open_meteo` 300 s; schedule `12,42 * * * *` with `withoutOverlapping(10)`; two retries (2 s, 5 s) on connection errors and 5xx; no `Retry-After` handling and no total deadline (unlike `SourceClient`). an every-minute `--catch-up` check (60-minute limit, 30-minute retry window, shared lock), admin manual refresh through `RunSourceSync`, a partial-response warning, and `http_status` recorded only for real HTTP errors | Without it the weather would be empty; the extra rules cover a sleeping machine and partial answers |
 | 8 | **Reload throttle** | Route middleware `throttle:6,1` | `RateLimiter` in the controller: 6 per minute per IP, then **429** with `Retry-After`. Plain polling is not limited by it | Applies only to `refresh=1` |
 | 9 | **Invalidation timing** | "After commit (`DB::afterCommit`)" | Called after the sync's transaction closure returns | Equivalent unless a caller wraps the sync in an outer transaction; none does |
 | 10 | **`country-alerts:{id}:v1`** | Written by the Welcome page | Only **cleared** on a change; nothing writes it yet | The Welcome country alerts area is not built |
@@ -2364,8 +2369,8 @@ Temperature, condition, rain, wind speed, humidity and the daily minimum and max
 | Abandoned-run sweep | **[Implemented]** Runs only while the lock is held. Leftover `running` rows become `failed` ("Abandoned: the process stopped before finishing."). `queued` rows older than 10 minutes become `failed` ("Not picked up by a worker."). `data_sources.last_status` is reset if it said `running` | same file |
 | `warning_message` | **[Implemented]** A GDACS run whose Green fetch fails stays `status = success`, stores the note in `warning_message`, and leaves `last_error` null and `consecutive_failures` 0 (§28.11 item 6) | `GdacsClient.php`, `FetchResult.php` |
 | `RunSourceSync` | **[Implemented]** `ShouldBeUnique` per source, `tries = 1`, `failOnTimeout`, timeout 240 s from config, `uniqueFor` 360 s. If the lock is busy it exits and deletes its own row only if still `queued` | `app/Jobs/RunSourceSync.php` |
-| Admin endpoints | **[Implemented]** `POST /admin/data-sources/refresh` (`source` = gdacs, usgs or all; `auth`, `verified`, `admin`, `throttle:3,1`; returns 202 with `queued`, `already_running`, `already_queued` or `cooldown` per source) and `GET /admin/data-sources` | `app/Http/Controllers/Admin/DataSourceController.php` |
-| Admin Data Freshness | **[Implemented]** Cards with the §18.2 status rules and thresholds, latest run with its display state (queued, running, success, success with warnings, failed, abandoned), the 2-minute "queue worker may not be running" note, the last 20 runs, and the Open-Meteo observation and capital coverage | `SourceHealthService::adminSnapshot()`, `resources/js/components/admin/FreshnessPanel.vue` |
+| Admin endpoints | **[Implemented]** `POST /admin/data-sources/refresh` (`source` = gdacs, usgs, open_meteo or all; `auth`, `verified`, `admin`, `throttle:3,1`; returns 202 with `queued`, `already_running`, `already_queued` or `cooldown` per source) and `GET /admin/data-sources` | `app/Http/Controllers/Admin/DataSourceController.php` |
+| Admin Data Freshness | **[Implemented]** Cards with the §18.2 status rules and thresholds, latest run with its display state (queued, running, success, success with warnings, failed, abandoned), the 2-minute "queue worker may not be running" note, the last 10 runs of each source (with a source filter, trigger and HTTP status), and the Open-Meteo observation and capital coverage | `SourceHealthService::adminSnapshot()`, `resources/js/components/admin/FreshnessPanel.vue` |
 | Safety Guides and Emergency Contacts | **[Implemented]** One public page, `/preparedness`, with a country filter for the contacts and a disaster-type filter for the guides (§30.5); admin create, view, edit, publish or unpublish, delete, with server validation | `PreparednessController`, `Admin\SafetyGuideAdminController`, `Admin\EmergencyContactAdminController`, `app/Http/Requests/Admin/` |
 | Admin dashboard (`/admin`) | **[Implemented]** Tabs: Overview (users total, verified, admins; guide and contact counts), Safety Guides, Emergency Contacts, Data Freshness | `Admin\AdminDashboardController`, `resources/js/pages/admin/Dashboard.vue` |
 | Welcome previews | **[Implemented]** Up to 3 published guides (global, plus the user's country) and up to 3 contacts for the user's country; a guest gets a country chooser | `DisasterDashboardController::home()`, `Welcome.vue` |

@@ -97,7 +97,12 @@ function formatTime(isoString: string | null | undefined): string {
                             variant="outline"
                             class="border-amber-500/30 bg-amber-500/10 text-[10px] font-semibold text-amber-700 dark:text-amber-400"
                         >
-                            Stale Cache ({{
+                            {{
+                                sourceMeta.status === 'Delayed'
+                                    ? 'Delayed'
+                                    : 'Stale Cache'
+                            }}
+                            ({{
                                 formatTime(sourceMeta.last_successful_fetch)
                             }})
                         </Badge>
@@ -143,15 +148,33 @@ function formatTime(isoString: string | null | undefined): string {
             >
                 <AlertTriangle class="mt-0.5 size-4 shrink-0 text-amber-500" />
                 <div>
-                    <p class="font-semibold">
+                    <p
+                        v-if="sourceMeta.status === 'Delayed'"
+                        class="font-semibold"
+                        data-test="weather-banner-delayed"
+                    >
+                        Weather data may be out of date
+                    </p>
+                    <p
+                        v-else
+                        class="font-semibold"
+                        data-test="weather-banner-stale"
+                    >
                         Serving Cached Weather Observations (Stale Data)
                     </p>
-                    <p class="mt-0.5">
-                        {{
-                            sourceMeta.error ||
-                            'Live Open-Meteo refresh failed.'
-                        }}
-                        Last successful update:
+                    <p v-if="sourceMeta.error" class="mt-0.5">
+                        The last Open-Meteo refresh failed:
+                        {{ sourceMeta.error }}
+                        Showing the last stored observations. Last successful
+                        update:
+                        <strong>{{
+                            formatTime(sourceMeta.last_successful_fetch)
+                        }}</strong
+                        >.
+                    </p>
+                    <p v-else class="mt-0.5" data-test="weather-stale-neutral">
+                        Weather has not been refreshed recently. Showing the
+                        last stored observations. Last successful update:
                         <strong>{{
                             formatTime(sourceMeta.last_successful_fetch)
                         }}</strong
