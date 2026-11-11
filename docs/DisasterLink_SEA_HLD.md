@@ -10,8 +10,8 @@
 | Item | Value |
 |---|---|
 | Document | High-Level Design — DisasterLink SEA |
-| Version | **1.6** (implementation record of Phase 6; no new requirements) |
-| Revision date | 10 November 2026 |
+| Version | **1.7** (implementation record of Phase 7 and the weather refresh follow-up; no new requirements) |
+| Revision date | 11 November 2026 |
 | Path | `docs/DisasterLink_SEA_HLD.md` (canonical HLD) |
 | Related document | `docs/ASEAN_LOCATION_DATA_RESEARCH.md`. It researched **State/Province (ADM1)** data for the earlier v1.1 design. In v1.2 it is a **reference only** (licensing approach, geoBoundaries findings). The State/Province dataset it recommends is **not** part of the MVP. |
 | Basis | Read-only inspection of the repository snapshot `DisasterLink_SEA`; the original brief; the v1.1 decision brief; the v1.2 decision brief |
@@ -31,6 +31,7 @@
 | **1.4** | **10 Nov 2026** | **Cache layer and the three data operations** (§28, approved requirements; no code changed). Main changes:<br>• **Target flow documented:** GDACS/USGS → `DisasterSyncService` ← Scheduler / Admin manual sync → MySQL → Cache → `DashboardQueryService` → UI.<br>• **Single cache strategy:** `Cache::remember` cache-aside on the `database` driver, with a generation counter; `Cache::flexible` text removed.<br>• **Invalidation only after commit and only on relevant change;** failed and no-change syncs leave the cache alone; source health and `data_as_of` are read live.<br>• **Admin manual sync** is a queued, unique, throttled job with queued / running / success / failed states and a per-source result.<br>• **Public "Reload data" never calls GDACS/USGS;** admin button is "Sync from sources".<br>• **Reliability values calculated:** run deadline, lock TTL, `withoutOverlapping(10)`, job timeout, queue `retry_after`; abandoned-run sweep.<br>• Phase 2 follow-ups listed with their true state; real Phase 2 component names recorded.<br>• **Clarified:** four statuses plus a nullable `warning_message` ("Success with warnings" is a display state); atomic claim of queued rows; a job that cannot get the lock exits; `sync_runs` is extended (with `request_uuid`) instead of a `sync_requests` table. |
 | **1.5** | **10 Nov 2026** | **Phase 5 implementation record (§29).** Phase 5 (pages served from MySQL through a generation-keyed cache) is built, so statements that the public pages call GDACS, USGS, EONET or Open-Meteo, that `DashboardCache` / `DashboardQueryService` are future work, and that v1.4 changed no code, are marked as historical with a pointer to §29. §29 lists every difference between the design (§28) and the code, including: the public event id format, 404 for unknown events, the removed weather fields, the weather refresh schedule and lock, the 7-day window, and one decided design question (UD-6: a stale dashboard payload may be served for up to 300 s if cache invalidation fails). Earlier text is kept; it is annotated, not rewritten. |
 | **1.6** | **10 Nov 2026** | **Phase 6 implementation record (§30).** Guides and contacts (public pages, admin CRUD, Welcome previews), the admin dashboard, the admin "Sync from sources" job (`RunSourceSync`), the `sync_runs` migration, the abandoned-run sweep, the `warning_message` for a Green-level GDACS failure, and the admin Data Freshness tab are built. The public `/freshness` page is removed. Safety Guides and Emergency Contacts are one public page, `/preparedness` (§30.5). §28 items marked [Future work] for Phase 6 are annotated. §30 lists every difference from the design and what is **not** built (scheduler heartbeat banner, content seeding, extra Overview counts, country review list, guide caching). |
+| **1.7** | **11 Nov 2026** | **Phase 7 implementation record (§31).** Registration with a Country and the alerts preference, login redirects, the themed Login/Register and Settings pages, the guest and signed-in header, the Profile Settings page, and the Welcome country-alerts area are built. The weather follow-up (catch-up refresh, admin manual Open-Meteo sync, shared freshness thresholds, partial-response warning, per-source run history) is recorded in §14, §18 and §28. Statements that no longer match the code are corrected in place (§6.3, §7.1, §7.3, §8.4, §9.1, §13.9, §16.3, §20.6, §29.3, §30.3, §30.4); §31.2 lists every difference from the design. |
 
 v1.2 **supersedes** the State/Province design of v1.1. Where v1.1 and v1.2 differ, v1.2 applies. **Where v1.3 (§27) differs from earlier sections, §27 applies. Where v1.4 (§28) differs from any earlier section, §28 applies. Where §29 (v1.5) and §30 (v1.6) record how Phase 5 and Phase 6 were actually built, they describe the implemented state and list every difference from §28.**
 
@@ -302,8 +303,8 @@ flowchart LR
 | `GET /preparedness` | **[v1.6]** The public "Be Prepared" page: Emergency Contacts and Safety Guides together (§8.3, §30.5) | Public | Two independent filters in the URL: `?country={ISO2}` (contacts) and `?hazard={type}` (guides) |
 | `GET /safety-guides` | *(Earlier design: Safety Guides detail page.)* **v1.6:** permanent redirect (301) to `/preparedness#guides` | Public | Keeps `?country` only |
 | `GET /emergency-contacts` | *(Earlier design: Emergency Contacts detail page.)* **v1.6:** permanent redirect (301) to `/preparedness#contacts` | Public | Keeps `?country` only |
-| `GET /api/locations/countries` | Country select options | Public | Cached 24 h |
-| `GET /api/me/country-alerts` (or an Inertia prop on `/`) | Recent eligible events for the user's country | `auth` | Cached per country, 60 s |
+| `GET /api/locations/countries` | Country select options | Public | Cached 24 h. *(v1.7: **not built.** The active countries are passed as the Inertia prop `countries` on `/`, `/register` and `/settings/profile`; there is no endpoint and no cache entry.)* |
+| `GET /api/me/country-alerts` (or an Inertia prop on `/`) | Recent eligible events for the user's country | `auth` | Cached per country, 60 s. *(v1.7: built as the Inertia prop `countryAlerts` on `/`, §31.1; no endpoint.)* |
 | `POST /register`, `PUT /settings/profile` | Fortify registration / profile with `country_id` and `alerts_enabled` | Guest / `auth` | Validated server-side |
 | `GET /admin` | Admin Dashboard (tabs) | `auth`, `verified`, `admin` | `?tab=overview\|guides\|contacts\|freshness` |
 | `GET /admin/stats` | Overview counts | admin | |
@@ -320,7 +321,7 @@ The full overall diagram is in §21.
 ### 7.1 Roles [Missing → Proposed]
 
 - `users.role`: `admin` | `user`, default `user`, backed by a PHP enum. **Not** mass-assignable.
-- Admins are created by a seeder or `php artisan app:make-admin {email}`. The command also asks for the admin's **Country**.
+- Admins are created by a seeder or `php artisan admin:create` (options `--name`, `--email`, `--password`, `--country`). The command asks for the admin's **Country** (an ISO2 code of an active country; optional) *(v1.7: the command is `admin:create`, not `app:make-admin`)*.
 
 ### 7.2 Permission matrix
 
@@ -338,7 +339,7 @@ Administrators are **not** excluded from alerting. An admin is alerted for event
 ### 7.3 Enforcement
 
 - `/admin/*` routes use `['auth', 'verified', 'admin']`; Form Requests also check `Gate::allows('admin')`.
-- `auth.user.is_admin` is shared with Inertia **only** to show or hide UI.
+- *(v1.7: the whole authenticated user is shared as `auth.user`, including `role`, `country_id` and `alerts_enabled`; the header checks `auth.user.role === 'admin'`. No separate `is_admin` flag exists.)* It is used **only** to show or hide UI; the server enforces access.
 - Feature tests confirm a `user` gets 403 on every admin route.
 
 ---
@@ -390,9 +391,9 @@ Both pages reuse `DisasterHeader` / `DisasterFooter` and the existing card and t
 
 ### 8.4 Login and Registration
 
-1. A themed auth layout (`AuthSplitLayout` with DisasterLink SEA colours and logo); responsive.
+1. A themed auth layout *(v1.7: `AuthDisasterLayout`, wrapped by `AuthLayout`)* with DisasterLink SEA colours and logo; responsive.
 2. A **Login | Register** toggle using Inertia `<Link>`s to the Fortify routes, so throttling and verification are unchanged.
-3. Register adds **one Country select** (11 options from `GET /api/locations/countries`). **No State/Province or City fields.**
+3. Register adds **one Country select** (the 11 active countries, *v1.7: from the Inertia prop `countries`, not `GET /api/locations/countries`*). **No State/Province or City fields.**
 4. Server validation: `country_id` must exist in `countries` and be active (`Rule::exists('countries','id')->where('is_active', true)`).
 5. Email verification is unchanged (Fortify + `MustVerifyEmail`).
 6. `settings/Profile.vue` gets **Country** and the **"Email me disaster alerts"** toggle (§13.2).
@@ -437,7 +438,7 @@ Users and administrators register a **Country** only. There is no State/Province
 
 **Legacy users** without a country (only the seeded test user exists) are prompted to set one. Users without `country_id` are never alert-eligible.
 
-**Seeding:** `CountrySeeder` upserts by `iso2` (idempotent) and clears `locations:countries`.
+**Seeding:** `CountrySeeder` upserts by `iso2` (idempotent) and calls `Cache::forget('locations:countries')`. *(v1.7: nothing writes that key; the countries are read from MySQL when needed.)*
 
 ### 9.2 Country boundaries (ADM0)
 
@@ -845,7 +846,7 @@ An event is **alert-eligible** when **all** of these hold:
 - **Visibility:** the admin Overview shows today's and this month's usage, plus counts of deferred, failed and suppressed logs.
 
 **Capacity reality:**
-- Country-level alerts go to **every** opted-in, verified user in that country.
+- Country-level alerts go to **every** verified user in that country whose `alerts_enabled` is true *(v1.7: the registration checkbox is pre-checked to match the database default `true`; it is not described as explicit opt-in consent)*.
 - **A single event in a country with more than 100 registered users exceeds the daily quota on its own.** The rest are delivered over the following days.
 - At 3,000 a month, a few hundred users and several eligible events a month can exhaust the monthly quota.
 - This is acceptable for a training project but is a **key limitation** (§26.4). The remedies are a paid tier or a second provider (Future, not MVP).
@@ -1054,7 +1055,7 @@ All timestamps are stored in **UTC**.
 | `country-alerts:{country_id}:v1` | 60 s | A sync with a relevant change in that country (old and new country) |
 | `weather:capitals:v1` | 35 min | Rewritten every 30 min |
 | `guides:{country\|all}:v1`, `contacts:{country}:v1` | 10 min | Admin create/update/delete |
-| `locations:countries` | 24 h | `CountrySeeder` |
+| `locations:countries` | 24 h | `CountrySeeder` *(v1.7: **not used**; nothing writes this key. The seeder's `forget` is harmless.)* |
 | `geo:adm0:v1` | 24 h | `CountryBoundarySeeder` |
 | `admin:stats` | 60 s | TTL |
 | `email_quota:{date}`, `email_quota:{month}` | 2 days / 32 days | Increment-only |
@@ -1441,7 +1442,7 @@ The deployment view is in §17.5.
 2. Fetch and validate. On failure, record it; data and `last_success_at` are unchanged.
 3. Otherwise: upsert events, link USGS/GDACS earthquake duplicates, and **resolve the country**. Unresolved events go to review and stop there.
 4. For resolved events: check the threshold and **24-hour recency**. Eligible ones are queued for alerting.
-5. The alert job leases the event, selects verified, opted-in users (and admins) **whose country matches**, and inserts unique logs. It queues email jobs and marks the event completed.
+5. The alert job leases the event, selects verified users (and admins) with `alerts_enabled = true` **whose country matches**, and inserts unique logs. It queues email jobs and marks the event completed.
 6. Each email job claims its log, checks the Resend quota (deferring if exhausted), then sends (or suppresses in dry-run) and records the result.
 
 ```mermaid
@@ -2319,7 +2320,7 @@ The scheduler path has no queued row: `DisasterSyncService::sync()` returns `nul
 | 7 | **Weather refresh** | Phase 5 did not list it (§28.12) | Built in Phase 5 because the pages no longer call Open-Meteo. Lock `sync:open_meteo` 300 s; schedule `12,42 * * * *` with `withoutOverlapping(10)`; two retries (2 s, 5 s) on connection errors and 5xx; no `Retry-After` handling and no total deadline (unlike `SourceClient`). an every-minute `--catch-up` check (60-minute limit, 30-minute retry window, shared lock), admin manual refresh through `RunSourceSync`, a partial-response warning, and `http_status` recorded only for real HTTP errors | Without it the weather would be empty; the extra rules cover a sleeping machine and partial answers |
 | 8 | **Reload throttle** | Route middleware `throttle:6,1` | `RateLimiter` in the controller: 6 per minute per IP, then **429** with `Retry-After`. Plain polling is not limited by it | Applies only to `refresh=1` |
 | 9 | **Invalidation timing** | "After commit (`DB::afterCommit`)" | Called after the sync's transaction closure returns | Equivalent unless a caller wraps the sync in an outer transaction; none does |
-| 10 | **`country-alerts:{id}:v1`** | Written by the Welcome page | Only **cleared** on a change; nothing writes it yet | The Welcome country alerts area is not built |
+| 10 | **`country-alerts:{id}:v1`** | Written by the Welcome page | *(v1.7: **now written** by `CountryAlertsQuery`, TTL 60 s, and still forgotten for the old and new country of a relevant change.)* Before Phase 7 it was only cleared | The Welcome country alerts area is built in Phase 7 (§31) |
 | 11 | **Weather in the payload** | Part of the cached dashboard | Read through `weather:capitals:v1` (35 min), then MySQL | As §16.3 |
 
 ### 29.4 Weather fields no longer shown
@@ -2406,16 +2407,16 @@ Temperature, condition, rain, wind speed, humidity and the daily minimum and max
 | "Queue worker stopped" banner independent of a queued run | Must | **Not built** (same reason) |
 | Real guide and contact content from official sources | Must (Day 5 content) | **Not seeded.** Emergency numbers must be entered by an administrator from official sources; the application ships no invented numbers |
 | Admin Overview extras (events in 24 h, alert counts, quota) and the country review list | Should | **Not built** |
-| Welcome "Country alerts area" (`CountryAlerts.vue`) | Must | **Not built** (belongs with registration, Phase 7) |
-| Login and Register buttons, country registration | Must | **Not built** (Phase 7) |
+| Welcome "Country alerts area" (`CountryAlerts.vue`) | Must | **Not built** (belongs with registration, Phase 7). *(v1.7: built in Phase 7, §31.1.)* |
+| Login and Register buttons, country registration | Must | **Not built** (Phase 7). *(v1.7: built in Phase 7, §31.1.)* |
 | `model:prune` for `sync_runs`, `queue:prune-failed`, backups | Should | **Not built** |
 
 ### 30.4 Open items
 
 - `UD-1` (60 s cooldown) is implemented as written. `UD-2` (re-measure the 150 s and 240 s values) is unchanged: one live manual USGS run took about 1 s and was not a timing test.
 - **Local processes (checked with `php artisan dev:list`).** `composer run dev` starts the web server, a queue worker (`queue:listen --tries=1 --timeout=0`), `pail` and Vite. It does **not** start the scheduler, so `php artisan schedule:work` must run in another terminal for the GDACS, USGS, weather and alert schedules. The dev worker has `--timeout=0` (no limit), not the 240 s of §28.9; that is acceptable locally but must not be copied to production.
-- **Header width for signed-in users (measured in Chrome at 1024, 1280, 1440 and 1920 px).** A guest has no overflow at any of these widths. The signed-in "Account" link (89 px, already in the header) makes the **home page** overflow by 54 px at 1280 px for a regular user, because the "Data as of …" chip is also shown there. An admin also has the "Admin" nav item (87 px), which overflows the home page by 141 px at 1280 px and 53 px at 1440 px, and every page by 87 px at 1024 px. The "Reload data" button was visible at every width but its right edge sat 3 px past the viewport on the admin home page at 1280 px. `/admin` and `/preparedness` themselves do not overflow at 1280 px or wider. **Not fixed.** Measured candidates, applied only in the browser: dropping the "Data as of " prefix removes the regular user's overflow; it and an icon-only Admin link together still leave 17 px at 1280 px and 35 px at 1024 px for an admin.
-- **"Reload data" does nothing on pages without live data.** The header button is shown on `/preparedness`, `/admin` and the report pages, but those pages do not handle its event (found by reading the code; the click was not tested).
+- **Header width for signed-in users (measured in Chrome at 1024, 1280, 1440 and 1920 px).** A guest has no overflow at any of these widths. The signed-in "Account" link (89 px, already in the header) makes the **home page** overflow by 54 px at 1280 px for a regular user, because the "Data as of …" chip is also shown there. An admin also has the "Admin" nav item (87 px), which overflows the home page by 141 px at 1280 px and 53 px at 1440 px, and every page by 87 px at 1024 px. The "Reload data" button was visible at every width but its right edge sat 3 px past the viewport on the admin home page at 1280 px. `/admin` and `/preparedness` themselves do not overflow at 1280 px or wider. **Not fixed.** Measured candidates, applied only in the browser: dropping the "Data as of " prefix removes the regular user's overflow; it and an icon-only Admin link together still leave 17 px at 1280 px and 35 px at 1024 px for an admin. *(v1.7: resolved in Phase 7.3. The Account menu replaced the wide link, the sync chip is hidden below 1280 px and the Reload button is icon-only below 1536 px; checked in Chrome at 1920 to 320 px with no overflow for a guest, a user and an admin.)*
+- **"Reload data" does nothing on pages without live data.** The header button is shown on `/preparedness`, `/admin` and the report pages, but those pages do not handle its event (found by reading the code; the click was not tested). *(v1.7: resolved in Phase 7.3. The chip and the Reload button are shown only on pages that pass `data-as-of`.)*
 - **No JavaScript test runner.** The filter, URL-state and layout behaviour of `/preparedness` was checked by server tests plus a scripted Chrome run against a scratch SQLite copy (§30.5). That run is not part of the automated suite.
 
 ### 30.5 The unified public page: `/preparedness`
@@ -2461,6 +2462,53 @@ The alert email (§13) now links to the new URLs. Old emails keep working throug
 **Header.** One "Be Prepared" item links to `/preparedness`. The "Data as of" chip shows only on pages that pass `data-as-of` (§30.2 item 14).
 
 **What was checked in Chrome** (headless Chrome 157 against a scratch SQLite copy of the schema with sample content; the MySQL development data was not used): filters and URL state, Back and Forward, refresh, anchors, scroll position, all four empty states, the signed-in saved-country default and the explicit "no country" override, the old-URL redirects, mobile (375 px) layout, the admin tabs, and the absence of the sidebar shell. Known limits of the header at some widths are in §30.4.
+
+## 31. v1.7: Phase 7 Implementation Record
+
+> **Status: [Implemented and tested locally].** This records what Phase 7 built (registration with a country, the alerts preference, themed authentication and Settings pages, the header, and the Welcome country-alerts area) together with the weather follow-up. It does not change a requirement. §7, §8 and §13 stay as the design; this section lists where the code differs and what is not built. The weather follow-up is described where it belongs: §14.1, §14.2, §18.2 and the §29.3 row 7.
+
+### 31.1 What now exists
+
+| Item | State | Where |
+|---|---|---|
+| Registration | **[Implemented]** `country_id` is required and must be an **active** country (message "Please choose your country."); `alerts_enabled` defaults to `true` when absent. The role stays guarded (not mass-assignable). A user without a country (an older account) is still valid | `app/Actions/Fortify/CreateNewUser.php`, `app/Concerns/ProfileValidationRules.php` |
+| Registration limit | **[Implemented]** `register` limiter: 6 per minute per IP, in the web middleware group | `FortifyServiceProvider`, `app/Http/Middleware/ThrottleRegistrations.php`, `bootstrap/app.php` |
+| After login / registration | **[Implemented]** The page the person was trying to reach wins (query string kept). The role only picks the fallback: administrators `/admin`, others `/`. A non-administrator's intended `/admin` or `/admin/...` URL (decoded, case-insensitive, slash-normalised) is ignored. `/dashboard` redirects the same way. `config/fortify.php` `home` is `/` | `app/Http/Responses/LoginResponse.php`, `RegisterResponse.php`, `ChoosesAfterAuthPage.php`, `routes/web.php` |
+| Admin creation | **[Implemented]** `admin:create` with `--country` (ISO2 of an active country, optional), also for promoting an existing user | `app/Console/Commands/CreateAdminUser.php` |
+| Login and Register pages | **[Implemented]** A standalone split layout (brand panel from 1024 px, small logo below), a Login \| Register toggle, "Back to home". Register has name, email, a **required** Country select fed by the `countries` prop, passwords, and the alerts checkbox, **checked by default**, with a hidden field that always sends `alerts_enabled` as `1` or `0`. Password reset, verification and confirmation pages use the same layout | `resources/js/layouts/auth/AuthDisasterLayout.vue`, `resources/js/pages/auth/` |
+| Header | **[Implemented]** Guests: "Log in" (outline) and "Register" (filled) from 768 px, full-width buttons in the mobile menu. Signed in: an **Account** menu (Settings, Admin for administrators, Log out); "Admin" is no longer in the main navigation. The sync chip (time only; the countdown hidden below 1280 px) and the Reload button (icon only below 1536 px) show only on pages that pass `data-as-of` | `resources/js/components/disaster/DisasterHeader.vue` |
+| Settings pages | **[Implemented]** `/settings/*` use the DisasterLink header and footer, an "Account Settings" heading and Profile \| Security \| Appearance tabs. The starter sidebar shell is gone for these pages | `resources/js/layouts/settings/Layout.vue`, `resources/js/app.ts` |
+| Profile Settings | **[Implemented]** Personal Information (name, email, **optional** Country with "No country selected"; a country that was deactivated is kept as "Your current country (no longer available)") and Disaster Alert Preferences ("Email me disaster alerts (On/Off)", an explicit `1`/`0`). Changing the email clears verification and alerts are not sent until the new address is verified (unchanged rule); "Saved." and the toast confirm a save | `resources/js/pages/settings/Profile.vue`, `ProfileController`, `ProfileUpdateRequest` |
+| Welcome country alerts | **[Implemented]** The second section of `/`. A guest sees the promotion (§8.2 wording, **Create free account**, **Log in**) and receives **no** alert data (`countryAlerts = null`). A signed-in user sees "Recent alerts for {Country}", an unverified user the same list plus "Verify your email to receive alert emails" with a resend link and its confirmation, and a user without a (supported) country a prompt to set one in Settings. Each row shows type, severity, source, title, location, **Alerted** and **Occurred** times, "Event details" and "Original source" | `CountryAlertsQuery`, `resources/js/components/disaster/CountryAlerts.vue`, `DisasterDashboardController::home()` |
+| `CountryAlertsQuery` rules | **[Implemented]** Canonical events of the user's country with a resolved country and `alert_status` `pending` or `completed`, whose `threshold_met_at` is within the last **7 days**, newest first by `threshold_met_at`, at most **10**. Cached under `country-alerts:{id}:v1` for **60 s**; a relevant sync forgets the key for the old and new country | `app/Services/Disaster/Dashboard/CountryAlertsQuery.php`, `DashboardCache` |
+| Tests | **[Done]** 694 tests (691 passed, 3 skipped) with the weather follow-up. Phase 7 added `RegistrationTest`, `AuthenticationTest`, `AuthPagesTest`, `ProfileUpdateTest`, `ProfileSettingsPageTest`, `HeaderNavigationTest`, `CreateAdminUserCommandTest`, `CountryAlertsTest` and alert-integration tests | `tests/Feature/` |
+
+### 31.2 Differences from the design
+
+| # | Topic | Design | Implemented | Why |
+|---|---|---|---|---|
+| 1 | Country list | `GET /api/locations/countries`, cached 24 h (§6.3, §8.4) | The Inertia prop `countries` on `/`, `/register` and `/settings/profile`; no endpoint, no `locations:countries` entry | One fewer request and endpoint; the list is small and read from MySQL |
+| 2 | Country alerts source | `GET /api/me/country-alerts` or an Inertia prop | The Inertia prop `countryAlerts` on `/`, cached 60 s per country | The page already renders through Inertia |
+| 3 | Shared user | `auth.user.is_admin` | The full `auth.user` (with `role`); the header checks `role === 'admin'` | The starter already shared the user; the server still enforces access |
+| 4 | Recent alerts time | "Time" | The window and the order use `threshold_met_at` (when the event became alert-worthy). Each row shows it as **Alerted** and `occurred_at` as **Occurred** | An event that occurred long ago but escalated recently must not look new |
+| 5 | Alert recipients wording | "opted-in" | "alerts-enabled" (`alerts_enabled = true`, default `true`); the registration checkbox is pre-checked and is not described as explicit consent | The rule is a default-on preference |
+| 6 | Admin command | `app:make-admin {email}` | `admin:create` with options | The command also promotes existing users and validates the country |
+| 7 | Auth layout name | `AuthSplitLayout` | `AuthDisasterLayout` (through `AuthLayout`) | A new standalone layout; the starter ones are no longer used by the auth pages |
+| 8 | Country on Profile Settings | Not specified | **Optional**; clearing it is allowed; an inactive current country is kept | Older accounts have no country |
+| 9 | Settings layout | Keep the starter sidebar for `/settings/*` (a Phase 7 planning decision) | Replaced by the themed layout in Phase 7.4 after review | The sidebar did not match the DisasterLink identity |
+| 10 | Admin in the navigation | "Admin" item in the main navigation (§30.1) | In the Account menu only | Header width; the main navigation stays public |
+
+### 31.3 Not built, and open items
+
+- **Unsubscribe link and `List-Unsubscribe` header** in alert emails: deferred (users change the preference in Settings).
+- **Welcome list refresh:** the country alerts are loaded with the page and are not part of the 60 s polling, so an open tab can show a list up to 60 s old, or older until the next visit.
+- **Weather follow-ups not done:** the scheduled `:12`/`:42` refresh does not skip after a very recent catch-up; `capitals_total` on the Freshness card is the fixed number 11; "Next run (about)" for weather is last attempt plus the interval and ignores the fixed `:12`/`:42` slots.
+- **Hydration warning** on `/user/confirm-password` (the page shown before `/settings/security`). Its password field uses `v-focus`; the cause was not confirmed. The Settings pages and every other page checked load without console errors.
+- **Dead code:** `resources/js/pages/Dashboard.vue` and the old starter layouts are unused by the pages above. The parked modules (`IntelligencePage`, `EmergencyCoordinationPage`) would still use the starter shell if their module flags were enabled (they are off by default). Removal was suggested, not done.
+- **Account menu click:** the menu content was checked with the menu forced open, because headless Chrome could not deliver a real click. A click in a normal browser was not tested.
+- **No JavaScript test runner.** Browser checks are scripted Chrome runs against a scratch SQLite copy (not part of the automated suite).
+
+**What was checked in Chrome** (headless Chrome 157, a scratch SQLite copy; the MySQL development data was not used; no real provider was called): a final sweep of 80 checks. Guest pages (`/`, `/map`, `/events`, `/weather`, `/preparedness`), the auth pages, a signed-in user (`/`, `/preparedness`, `/settings/profile`, `/settings/appearance`) and an administrator (`/admin`, `/`) at 1440, 1024, 768, 375 and 320 px: no horizontal overflow, no starter sidebar, the DisasterLink header present, no console errors. Access control: a guest is sent to `/login` from `/settings/profile`, `/admin` and `/dashboard`; a user gets 403 on `/admin`; `/dashboard` goes to `/` for a user and `/admin` for an administrator; login lands on `/` or `/admin`. Dark mode changes the colours without overflow. Earlier per-phase runs covered the Register form values, the Profile Settings saves, the Welcome alerts states and the weather Data Freshness panel.
 
 ---
 
